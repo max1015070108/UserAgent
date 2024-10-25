@@ -95,6 +95,9 @@ fn create_oauth_client() -> BasicClient {
         env::var("GOOGLE_CLIENT_SECRET")
             .expect("Missing GOOGLE_CLIENT_SECRET environment variable."),
     );
+
+    //proxy ip
+    let proxy_url = env::var("PROXY_URL").expect("Missing PROXY_URL environment variable.");
     let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
         .expect("Invalid authorization endpoint URL");
     let token_url = TokenUrl::new("https://www.googleapis.com/oauth2/v3/token".to_string())
@@ -262,12 +265,10 @@ async fn verify_pincode(
 
     match db.create_update_user(&params.email).await {
         Ok((user_account, new_user)) => {
+            println!("start create_update_user{:?}", new_user);
             if new_user {
                 //sendmsg to kafka
-                // let broker = env::var("BROKER").expect("broker must be set");
-                // kafka::KafkaHandler::new(broker.as_str(), kafka::KAFKA_TOPIC);
-                //
-                // let mut map = HashMap::new();
+
                 let mut map: HashMap<String, Value> = HashMap::new();
                 map.insert("user_id".to_string(), json!(user_account.user_id));
                 map.insert("type".to_string(), json!("user"));
