@@ -252,7 +252,7 @@ struct PinCodeVerification {
 async fn verify_pincode(
     web::Json(params): web::Json<PinCodeVerification>,
     db: web::Data<mysql_utils::DatabaseManager>,
-    kafka_handler: web::Data<kafka::KafkaHandler>,
+    // kafka_handler: web::Data<kafka::KafkaHandler>,
 ) -> impl Responder {
     // For demonstration purposes, we assume the correct pin code is "12345678"
     let correct_pin_code = "12345678";
@@ -266,14 +266,14 @@ async fn verify_pincode(
     match db.create_update_user(&params.email).await {
         Ok((user_account, new_user)) => {
             println!("start create_update_user{:?}", new_user);
-            if new_user {
-                //sendmsg to kafka
+            // if new_user {
+            //     //sendmsg to kafka
 
-                let mut map: HashMap<String, Value> = HashMap::new();
-                map.insert("user_id".to_string(), json!(user_account.user_id));
-                map.insert("type".to_string(), json!("user"));
-                kafka_handler.send_message("user", map);
-            }
+            //     let mut map: HashMap<String, Value> = HashMap::new();
+            //     map.insert("user_id".to_string(), json!(user_account.user_id));
+            //     map.insert("type".to_string(), json!("user"));
+            //     kafka_handler.send_message("user", map);
+            // }
 
             return HttpResponse::Ok().json(json!({
                 "user_id": user_account.user_id,
@@ -407,7 +407,6 @@ async fn main() -> std::io::Result<()> {
             .service(oauth_url)
             .service(verify_pincode)
             .app_data(db_manager.clone())
-            .app_data(kafka_handler.clone())
     })
     .bind("0.0.0.0:8000")?
     .run()
