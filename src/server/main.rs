@@ -45,7 +45,7 @@ use UserAgent::database::mysql_utils;
 //mq
 use UserAgent::mq::kafka;
 
-// const MarketingServerUrl: &str = "http://topai-marketing-server.demo-ray.svc.cluster.local/api/v1/voucher/exchange:80";
+// const MarketingServerUrl: &str = "topai-marketing-server.demo-ray.svc.cluster.local/api/v1/voucher/exchange:80";
 const MarketingServerUrl: &str = "159.135.196.73:32756";
 #[derive(Serialize, Deserialize)]
 struct UserInfo {
@@ -334,7 +334,6 @@ async fn verify_pincode(
             }
 
             return HttpResponse::Ok().json(json!({
-                "user_id": user_account.user_id,
                 "topai_token": user_account.token
             }));
         }
