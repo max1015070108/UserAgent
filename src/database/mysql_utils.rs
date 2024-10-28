@@ -178,6 +178,16 @@ impl DatabaseManager {
         Ok(())
     }
 
+    //get user by token
+    pub async fn get_user_by_token(&self, token: &str) -> Result<Option<UserAccount>> {
+        let result = sqlx::query_as::<_, UserAccount>("SELECT * FROM USER_ACCOUNT WHERE token = ?")
+            .bind(token)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(result)
+    }
+
     pub async fn delete_user(&self, user_id: i32) -> Result<()> {
         sqlx::query("DELETE FROM USER_ACCOUNT WHERE user_id = ?")
             .bind(user_id)

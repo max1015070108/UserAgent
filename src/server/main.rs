@@ -2,8 +2,11 @@ use actix_cors::Cors;
 use actix_session::{Session, SessionMiddleware};
 use actix_web::cookie::Key;
 use actix_web::{
-    get, middleware::Logger, post, web, App, Error, HttpResponse, HttpServer, Responder,
+    get, http::header, middleware::Logger, post, web, App, Error, HttpRequest, HttpResponse,
+    HttpServer, Responder,
 };
+
+use actix_web_httpauth::headers::authorization::{Authorization, Bearer};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -95,9 +98,6 @@ fn create_oauth_client() -> BasicClient {
         env::var("GOOGLE_CLIENT_SECRET")
             .expect("Missing GOOGLE_CLIENT_SECRET environment variable."),
     );
-
-    //proxy ip
-    let proxy_url = env::var("PROXY_URL").expect("Missing PROXY_URL environment variable.");
     let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
         .expect("Invalid authorization endpoint URL");
     let token_url = TokenUrl::new("https://www.googleapis.com/oauth2/v3/token".to_string())
@@ -357,7 +357,7 @@ async fn get_github_auth_url() -> impl Responder {
     HttpResponse::Ok().body(auth_url.to_string())
 }
 
-#[get("/api/user")]
+#[get("/api/v1/user")]
 async fn get_user() -> impl Responder {
     // 这里应该实现从session中获取用户信息的逻辑
     // 为了演示，我们返回一个模拟的用户
@@ -366,6 +366,50 @@ async fn get_user() -> impl Responder {
         email: "johndoe@example.com".to_string(),
     };
     HttpResponse::Ok().json(user)
+}
+
+#[get("/api/v1/userbytoken")]
+async fn get_user_by_token(
+    // params: web::Query<i32>,
+    db: web::Data<mysql_utils::DatabaseManager>,
+    req: HttpRequest,
+) -> impl Responder {
+    //判断token是否有效
+
+    let auth_header = match req.headers().get("Authorization") {
+        Some(header) => match header.to_str() {
+            Ok(str) => str,
+            Err(_) => {
+                return HttpResponse::Unauthorized().body("Invalid authorization header format")
+            }
+        },
+        None => return HttpResponse::Unauthorized().body("Missing authorization header"),
+    };
+
+    if !auth_header.starts_with("Bearer ") {
+        return HttpResponse::Unauthorized().body("Invalid token format");
+    }
+
+    let token_result: Result<&str, &str> = Ok(auth_header.split(" ").nth(1).unwrap_or(""));
+
+    match token_result {
+        Ok(auth_header) => {
+            // params: web::Query<oauth2::AuthorizationCode>,
+            let user = match db.get_user_by_token(auth_header).await {
+                Ok(user) => user,
+                Err(_) => {
+                    return HttpResponse::NotFound()
+                        .json("User not found for given token or token is invalid")
+                }
+            };
+
+            return HttpResponse::Ok().json(user);
+        }
+        Err(_) => {
+            // If token extraction or validation fails, return Unauthorized
+            return HttpResponse::Unauthorized().body("Invalid or missing token");
+        }
+    }
 }
 
 #[actix_web::main]
@@ -406,6 +450,7 @@ async fn main() -> std::io::Result<()> {
             .service(send_email)
             .service(oauth_url)
             .service(verify_pincode)
+            .service(get_user_by_token)
             .app_data(db_manager.clone())
     })
     .bind("0.0.0.0:8000")?
