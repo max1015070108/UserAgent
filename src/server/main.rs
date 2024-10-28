@@ -185,7 +185,7 @@ struct EmailParameters {
     email: String,
 }
 
-#[post("/api/v1/auth/email/send_pincode")]
+#[post("/api/v1/user/auth/email/send_pincode")]
 async fn send_email(
     web::Json(params): web::Json<EmailParameters>,
     db: web::Data<mysql_utils::DatabaseManager>,
@@ -248,7 +248,7 @@ struct PinCodeVerification {
 /**
 * verifying pincode
 **/
-#[post("/api/v1/auth/email/login_register")]
+#[post("/api/v1/user/auth/email/login_register")]
 async fn verify_pincode(
     web::Json(params): web::Json<PinCodeVerification>,
     db: web::Data<mysql_utils::DatabaseManager>,
@@ -291,7 +291,7 @@ async fn verify_pincode(
     HttpResponse::Ok().body("Pin code verified successfully")
 }
 
-#[get("/api/v1/oauth/init/{provider}")]
+#[get("/api/v1/user/oauth/init/{provider}")]
 async fn oauth_url(path: web::Path<(String,)>) -> impl Responder {
     let provider = path.into_inner().0;
     match provider.as_str() {
@@ -328,7 +328,7 @@ async fn oauth_url(path: web::Path<(String,)>) -> impl Responder {
     return HttpResponse::Ok().body("Unsupported error".to_string());
 }
 
-#[get("/api/v1/auth_google_url")]
+#[get("/api/v1/user/auth_google_url")]
 async fn get_auth_url() -> impl Responder {
     let client = create_oauth_client();
     let (auth_url, _csrf_token) = client
@@ -344,7 +344,7 @@ async fn get_auth_url() -> impl Responder {
     HttpResponse::Ok().body(auth_url.to_string())
 }
 
-#[get("/api/v1/github_auth_url")]
+#[get("/api/v1/user/github_auth_url")]
 async fn get_github_auth_url() -> impl Responder {
     let client = create_github_oauth_client();
     let (auth_url, _csrf_token) = client
@@ -357,7 +357,7 @@ async fn get_github_auth_url() -> impl Responder {
     HttpResponse::Ok().body(auth_url.to_string())
 }
 
-#[get("/api/v1/user")]
+#[get("/api/v1/user/userinfo")]
 async fn get_user() -> impl Responder {
     // 这里应该实现从session中获取用户信息的逻辑
     // 为了演示，我们返回一个模拟的用户
@@ -368,7 +368,7 @@ async fn get_user() -> impl Responder {
     HttpResponse::Ok().json(user)
 }
 
-#[get("/api/v1/userbytoken")]
+#[get("/api/v1/user/userbytoken")]
 async fn get_user_by_token(
     // params: web::Query<i32>,
     db: web::Data<mysql_utils::DatabaseManager>,
