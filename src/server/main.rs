@@ -1,6 +1,7 @@
 use actix_cors::Cors;
 use actix_session::{Session, SessionMiddleware};
 use actix_web::cookie::Key;
+use actix_web::error::ErrorInternalServerError;
 use actix_web::{
     get, http::header, middleware::Logger, post, web, App, Error, HttpRequest, HttpResponse,
     HttpServer, Responder,
@@ -11,17 +12,19 @@ use actix_web_httpauth::headers::authorization::{Authorization, Bearer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use aws_sdk_sesv2::types::EmailContent;
 use dotenv;
 use log::*;
 use serde_json::json;
 use std::env;
 // email part
 use aws_config;
-use aws_sdk_sesv2 as sesv2;
-use aws_sdk_sesv2::types::Destination;
-use aws_sdk_sesv2::types::Template;
-use aws_sdk_sesv2::Client;
+use aws_sdk_sesv2::error::BuildError;
+
+use aws_sdk_sesv2::{
+    types::{Destination, EmailContent, Template},
+    Client,
+};
+use reqwest;
 use std::collections::HashMap;
 
 // use aws_types::region::Region;
@@ -42,17 +45,51 @@ use UserAgent::database::mysql_utils;
 //mq
 use UserAgent::mq::kafka;
 
-// 配置常量
-const CLIENT_SECRETS_FILE: &str = "client_secret.json";
-const SCOPES: &[&str] = &["https://www.googleapis.com/auth/drive.metadata.readonly"];
-const API_SERVICE_NAME: &str = "drive";
-const API_VERSION: &str = "v2";
-
+// const MarketingServerUrl: &str = "http://topai-marketing-server.demo-ray.svc.cluster.local/api/v1/voucher/exchange:80";
+const MarketingServerUrl: &str = "159.135.196.73:32756";
 #[derive(Serialize, Deserialize)]
 struct UserInfo {
     name: String,
     email: String,
 }
+
+pub async fn exchange_voucher_code(user_id: i32, voucher_code: String) -> Result<(), Error> {
+    let client = reqwest::Client::new();
+
+    let marketing_server_url =
+        env::var("MARKETING_SERVER_URL").unwrap_or_else(|_| MarketingServerUrl.to_string());
+    let response = client
+        .post(format!(
+            "http://{}/api/v1/voucher/exchange",
+            marketing_server_url
+        ))
+        .header("Content-Type", "application/json")
+        .body(
+            json!({
+                "userId": user_id,
+                "voucherCode": voucher_code
+            })
+            .to_string(),
+        )
+        .send()
+        .await;
+
+    match response {
+        Ok(res) => {
+            if !res.status().is_success() {
+                println!("Failed to upload voucher code: {}", res.status());
+                return Err(ErrorInternalServerError(res.status().to_string()));
+            }
+        }
+        Err(e) => {
+            println!("Error uploading voucher code: {}", e);
+            return Err(ErrorInternalServerError(e.to_string()));
+        }
+    }
+
+    return Ok(());
+}
+// exchange voucher code
 
 //github oauth client
 fn create_github_oauth_client() -> BasicClient {
@@ -190,7 +227,7 @@ async fn send_email(
     web::Json(params): web::Json<EmailParameters>,
     db: web::Data<mysql_utils::DatabaseManager>,
 ) -> impl Responder {
-    println!(".{:?}", params.email);
+    println!("++++++{:?}", params.email);
 
     let glID = dotenv::var("GOOGLE_CLIENT_ID").unwrap();
     println!(".{:?}", glID);
@@ -218,13 +255,13 @@ async fn send_email(
 
     // 设置发件人和收件人
     let sender = "support@topnetwork.ai";
-    let recipient = "max1015070108@gmail.com";
+    // let recipient = "max1015070108@gmail.com";
 
     // 发送邮件
     let reponses = client
         .send_email()
         .from_email_address(sender)
-        .destination(Destination::builder().to_addresses(recipient).build())
+        .destination(Destination::builder().to_addresses(params.email).build())
         .content(email_content)
         .send()
         .await;
@@ -240,9 +277,15 @@ async fn send_email(
 }
 
 #[derive(Deserialize)]
+struct ExInfo {
+    voucher_code: String,
+}
+
+#[derive(Deserialize)]
 struct PinCodeVerification {
     email: String,
     pin_code: String,
+    ex_info: ExInfo,
 }
 
 /**
@@ -252,9 +295,12 @@ struct PinCodeVerification {
 async fn verify_pincode(
     web::Json(params): web::Json<PinCodeVerification>,
     db: web::Data<mysql_utils::DatabaseManager>,
-    // kafka_handler: web::Data<kafka::KafkaHandler>,
+    kafka_handler: web::Data<kafka::KafkaHandler>,
 ) -> impl Responder {
     // For demonstration purposes, we assume the correct pin code is "12345678"
+    //
+    //8位纯数字的随机数
+    // let correct_pin_code = format!("{:08}", rand::random::<u32>() % 100000000);
     let correct_pin_code = "12345678";
 
     // get pincode from mysql and check if expired
@@ -263,17 +309,29 @@ async fn verify_pincode(
         return HttpResponse::Unauthorized().body("Invalid pin code");
     }
 
+    println!("start create update .......");
     match db.create_update_user(&params.email).await {
         Ok((user_account, new_user)) => {
-            println!("start create_update_user{:?}", new_user);
-            // if new_user {
-            //     //sendmsg to kafka
+            println!("start create_update_user {:?}", new_user);
 
-            //     let mut map: HashMap<String, Value> = HashMap::new();
-            //     map.insert("user_id".to_string(), json!(user_account.user_id));
-            //     map.insert("type".to_string(), json!("user"));
-            //     kafka_handler.send_message("user", map);
-            // }
+            //sync to vouch
+            if !params.ex_info.voucher_code.is_empty() {
+                // TODO: Upload voucher code to specified URL
+                // Implementation needed to post voucher_code to endpoint
+                if let Err(e) =
+                    exchange_voucher_code(user_account.user_id, params.ex_info.voucher_code).await
+                {
+                    eprintln!("Failed to exchange voucher code: {}", e);
+                }
+            }
+            if new_user {
+                //sendmsg to kafka
+
+                let mut map: HashMap<String, Value> = HashMap::new();
+                map.insert("user_id".to_string(), json!(user_account.user_id));
+                map.insert("type".to_string(), json!("user"));
+                kafka_handler.send_message("user", map).await.unwrap();
+            }
 
             return HttpResponse::Ok().json(json!({
                 "user_id": user_account.user_id,
@@ -288,7 +346,7 @@ async fn verify_pincode(
 
     //sendmsg to kafka
 
-    HttpResponse::Ok().body("Pin code verified successfully")
+    // HttpResponse::Ok().body("Pin code verified successfully")
 }
 
 #[get("/api/v1/user/oauth/init/{provider}")]
@@ -325,7 +383,7 @@ async fn oauth_url(path: web::Path<(String,)>) -> impl Responder {
         _ => return HttpResponse::BadRequest().body("Unsupported provider"),
     };
 
-    return HttpResponse::Ok().body("Unsupported error".to_string());
+    // return HttpResponse::Ok().body("Unsupported error".to_string());
 }
 
 #[get("/api/v1/user/auth_google_url")]
@@ -424,13 +482,18 @@ async fn main() -> std::io::Result<()> {
     db_manager.create_table().await.unwrap();
 
     //kafka obj
-    let kafka_handler = web::Data::new(kafka::KafkaHandler::new(
+    let kafka_obj = match kafka::KafkaHandler::new(
         env::var("BROKER").expect("broker must be set").as_str(),
         kafka::KAFKA_TOPIC,
-    ));
+    ) {
+        Ok(handler) => handler,
+        Err(e) => panic!("Failed to create Kafka handler: {}", e),
+    };
+    let kafka_handler = web::Data::new(kafka_obj);
     // Further initialization or setup if needed
     // For example, you might want to call some setup function on db_manager
     info!("starting web server...");
+    println!("starting web server...");
     HttpServer::new(move || {
         let cors = Cors::default()
             .allowed_origin("http://localhost:8080")
@@ -452,6 +515,7 @@ async fn main() -> std::io::Result<()> {
             .service(verify_pincode)
             .service(get_user_by_token)
             .app_data(db_manager.clone())
+            .app_data(kafka_handler.clone())
     })
     .bind("0.0.0.0:8000")?
     .run()

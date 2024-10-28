@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Error, Result};
 use chrono::{DateTime, Utc};
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
@@ -26,8 +26,8 @@ pub const KAFKA_TOPIC: &str = "topai-marketing";
 
 // Kafka 处理器
 pub struct KafkaHandler {
-    producer: FutureProducer,
-    consumer: StreamConsumer,
+    pub producer: FutureProducer,
+    pub consumer: StreamConsumer,
 }
 
 impl KafkaHandler {
@@ -56,7 +56,7 @@ impl KafkaHandler {
         &self,
         event_type: &str,
         event_args: HashMap<String, serde_json::Value>,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         let message = KafkaMessage {
             event_type: event_type.to_string(),
             event_args,
@@ -65,7 +65,8 @@ impl KafkaHandler {
 
         let payload = serde_json::to_string(&message).context("Failed to serialize message")?;
 
-        self.producer
+        match self
+            .producer
             .send(
                 FutureRecord::to(KAFKA_TOPIC)
                     .payload(&payload)
@@ -73,9 +74,15 @@ impl KafkaHandler {
                 Duration::from_secs(5),
             )
             .await
-            .map_err(|(err, _)| anyhow::anyhow!("Failed to send message: {}", err))?;
+        {
+            Ok(_) => Ok(()),
+            Err((err, _)) => {
+                println!("Error sending message: {}", err);
+                Err(anyhow::anyhow!("Failed to send message: {}", err))
+            }
+        }
 
-        Ok(())
+        // Ok(())
     }
 
     // 订阅主题
