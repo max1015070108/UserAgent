@@ -95,7 +95,6 @@ pub async fn generate_tokens(
 pub async fn get_or_generate_pincode(
     email: &str,
     db: web::Data<mysql_utils::DatabaseManager>,
-    email_manager: web::Data<EmailManager>,
 ) -> Result<String, sqlx::Error> {
     // Check if pincode exists for this email
     match db.get_pincode_by_email(email).await {
@@ -114,19 +113,19 @@ pub async fn get_or_generate_pincode(
                 }
 
                 // Send email with new pincode
-                match email_manager.send_email_to(email).await {
-                    Ok(_) => {
-                        println!("Email sent successfully");
-                    }
-                    Err(e) => {
-                        error!("Failed to send email: {}", e);
-                        return Err(sqlx::Error::Protocol(format!(
-                            "Failed to send email: {}",
-                            e
-                        )));
-                        // return Err(anyhow::Error::from("Failed to send email"));
-                    }
-                };
+                // match email_manager.send_email_to(email).await {
+                //     Ok(_) => {
+                //         println!("Email sent successfully");
+                //     }
+                //     Err(e) => {
+                //         error!("Failed to send email: {}", e);
+                //         return Err(sqlx::Error::Protocol(format!(
+                //             "Failed to send email: {}",
+                //             e
+                //         )));
+                //         // return Err(anyhow::Error::from("Failed to send email"));
+                //     }
+                // };
                 Ok(new_pincode)
             }
         }
@@ -307,17 +306,44 @@ async fn send_email(
     db: web::Data<mysql_utils::DatabaseManager>,
     email_manager: web::Data<EmailManager>,
 ) -> impl Responder {
-    match get_or_generate_pincode(params.email.as_str(), db, email_manager).await {
-        Ok(pincode) => {
-            println!("Pincode: {}", pincode);
+    // match get_or_generate_pincode(params.email.as_str(), db, email_manager).await {
+    //     Ok(pincode) => {
+    //         println!("Pincode: {}", pincode);
+    //         HttpResponse::Ok().json(json!({
+    //             "message": "PINCODE sent to email"
+    //         }))
+    //     }
+    //     Err(e) => {
+    //         println!("Error generating pincode: {}", e);
+    //         // return ErrorInternalServerError(e.to_string());
+    //         HttpResponse::InternalServerError().body(format!("Failed to send_pincode: {}", e))
+    //     }
+    // }
+    // Send email with new pincode
+    //
+    let new_pincode = match get_or_generate_pincode(params.email.as_str(), db).await {
+        Ok(pincode) => pincode,
+        Err(e) => {
+            error!("Error generating pincode: {}", e);
+            return HttpResponse::InternalServerError()
+                .body(format!("Failed to generate_pincode: {}", e));
+        }
+    };
+
+    match email_manager
+        .send_email_to(params.email.as_str(), new_pincode.as_str())
+        .await
+    {
+        Ok(_) => {
+            println!("Email sent successfully");
             HttpResponse::Ok().json(json!({
                 "message": "PINCODE sent to email"
             }))
         }
         Err(e) => {
-            println!("Error generating pincode: {}", e);
-            // return ErrorInternalServerError(e.to_string());
+            error!("Failed to send email: {}", e);
             HttpResponse::InternalServerError().body(format!("Failed to send_pincode: {}", e))
+            // return Err(anyhow::Error::from("Failed to send email"));
         }
     }
 }
@@ -350,9 +376,33 @@ async fn verify_pincode(
     let correct_pin_code = "12345678";
 
     // get pincode from mysql and check if expired
-    // db.get_pincode_by_email
+    // let pin_code = match db.get_pincode_by_email(params.email.as_str()).await {
+    //     Ok(pincode) => match pincode {
+    //         Some(user_pincode) => {
+    //             let now = chrono::Utc::now();
+    //             let duration = now.signed_duration_since(user_pincode.created_at);
+
+    //             if duration.num_minutes() >= 10 {
+    //                 return HttpResponse::BadRequest().body("Pincode expired");
+    //             }
+    //             user_pincode.pincode
+    //         }
+    //         None => {
+    //             return HttpResponse::BadRequest().body("No pincode found for this email");
+    //         }
+    //     },
+    //     Err(e) => {
+    //         println!("Error getting pincode: {}", e);
+    //         return HttpResponse::InternalServerError()
+    //             .body(format!("Failed to get pincode: {}", e));
+    //     }
+    // };
+
+    // if params.pin_code != pin_code {
+    //     return HttpResponse::Unauthorized().body("mismatch Invalid pin code");
+    // }
     if params.pin_code != correct_pin_code {
-        return HttpResponse::Unauthorized().body("Invalid pin code");
+        return HttpResponse::Unauthorized().body("mismatch Invalid pin code");
     }
 
     println!("start create update .......");

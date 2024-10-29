@@ -54,10 +54,10 @@ impl EmailManager {
         Ok(())
     }
 
-    pub async fn send_email_to(&self, email: &str) -> Result<(), Error> {
+    pub async fn send_email_to(&self, email: &str, pincode: &str) -> Result<(), Error> {
         let template_data = json!({
             "name": email,
-            "pin_code": "",//get_or_generate_pincode(params.email.as_str(),db).await.unwrap(),
+            "pin_code": pincode,
         });
 
         let template_data_str = serde_json::to_string(&template_data).unwrap();

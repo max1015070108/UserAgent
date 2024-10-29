@@ -131,11 +131,32 @@ impl DatabaseManager {
         let now = Utc::now();
 
         // Generate an API token using a common method in Rust
-        let topai_token: String = thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(30)
-            .map(char::from)
-            .collect();
+        let topai_token = if let Ok(Some(existing_user)) = self.get_user_by_email(email).await {
+            if let Some(existing_token) = existing_user.token {
+                let days_since_registration = (now - existing_user.registration_time).num_days();
+                if days_since_registration <= 14 {
+                    existing_token
+                } else {
+                    thread_rng()
+                        .sample_iter(&Alphanumeric)
+                        .take(30)
+                        .map(char::from)
+                        .collect()
+                }
+            } else {
+                thread_rng()
+                    .sample_iter(&Alphanumeric)
+                    .take(30)
+                    .map(char::from)
+                    .collect()
+            }
+        } else {
+            thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(30)
+                .map(char::from)
+                .collect()
+        };
 
         // First perform the insert/update
         let result = sqlx::query(
