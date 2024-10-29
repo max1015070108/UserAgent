@@ -31,6 +31,14 @@ pub struct UserOauthAccount {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, FromRow, Serialize, Deserialize)]
+pub struct UserPincode {
+    pub id: i32,
+    pub pincode: String,
+    pub created_at: DateTime<Utc>,
+    pub email: String,
+}
+
 pub struct DatabaseManager {
     pub conn_string: String,
     pub pool: MySqlPool,
@@ -77,6 +85,19 @@ impl DatabaseManager {
                 last_login_time DATETIME,
                 last_access_time DATETIME,
                 token VARCHAR(255)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS USER_PINCODE (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                pincode VARCHAR(255) NOT NULL,
+                created_at DATETIME NOT NULL,
+                email VARCHAR(255) NOT NULL UNIQUE
             )
             "#,
         )
@@ -188,6 +209,16 @@ impl DatabaseManager {
         Ok(result)
     }
 
+    //get user by email
+    pub async fn get_user_by_email(&self, email: &str) -> Result<Option<UserAccount>> {
+        let result = sqlx::query_as::<_, UserAccount>("SELECT * FROM USER_ACCOUNT WHERE email = ?")
+            .bind(email)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(result)
+    }
+
     pub async fn delete_user(&self, user_id: i32) -> Result<()> {
         sqlx::query("DELETE FROM USER_ACCOUNT WHERE user_id = ?")
             .bind(user_id)
@@ -280,6 +311,45 @@ impl DatabaseManager {
             .await?;
 
         Ok(())
+    }
+
+    //user pin code operations
+    // insert pincode by user if exist then update
+    pub async fn insert_update_pincode(&self, pincode: &str, email: &str) -> Result<UserPincode> {
+        let now = Utc::now();
+        let result = sqlx::query(
+            r#"
+            INSERT INTO USER_PINCODE (pincode, created_at, email)
+            VALUES (?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                created_at = VALUES(created_at),
+                pincode = VALUES(pincode)
+            "#,
+        )
+        .bind(pincode)
+        .bind(now)
+        .bind(email)
+        .execute(&self.pool)
+        .await?;
+
+        let id = result.last_insert_id();
+
+        let pincode = sqlx::query_as::<_, UserPincode>("SELECT * FROM USER_PINCODE WHERE id = ?")
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await?;
+
+        Ok(pincode)
+    }
+
+    //get pincode by email
+    pub async fn get_pincode_by_email(&self, email: &str) -> Result<Option<UserPincode>> {
+        let result = sqlx::query_as::<_, UserPincode>("SELECT * FROM USER_PINCODE WHERE email = ?")
+            .bind(email)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(result)
     }
 }
 

@@ -9,6 +9,8 @@ use actix_web::{
 
 use actix_web_httpauth::headers::authorization::{Authorization, Bearer};
 
+use mysql::params;
+use oauth2::TokenResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -27,21 +29,14 @@ use aws_sdk_sesv2::{
 use reqwest;
 use std::collections::HashMap;
 
-// use aws_types::region::Region;
-// use aws_sdk_ses::config::{Builder, Config};
-///
-/// let config = aws_sdk_ses::Config::builder()
-///     .region(Region::new("us-east-1"))
-///     .build();
-///
 use oauth2::{
     basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
     PkceCodeChallenge, RedirectUrl, Scope, TokenUrl,
 };
 
+use UserAgent::communication::aws_utils::{self, EmailManager};
 // use DatabaseManager
-use UserAgent::database::mysql_utils;
-
+use UserAgent::database::mysql_utils::{self, UserPincode};
 //mq
 use UserAgent::mq::kafka;
 
@@ -53,11 +48,108 @@ struct UserInfo {
     email: String,
 }
 
+pub async fn generate_tokens(
+    // web::Json(params): web::Json<PinCodeVerification>,
+    email: String,
+    voucher_code: String,
+    db: web::Data<mysql_utils::DatabaseManager>,
+    kafka_handler: web::Data<kafka::KafkaHandler>,
+) -> Result<String, sqlx::Error> {
+    match db.create_update_user(email.as_str()).await {
+        Ok((user_account, new_user)) => {
+            println!("start create_update_user {:?}", new_user);
+
+            //sync to vouch
+            if !voucher_code.is_empty() {
+                // TODO: Upload voucher code to specified URL
+                // Implementation needed to post voucher_code to endpoint
+                if let Err(e) = exchange_voucher_code(user_account.user_id, voucher_code).await {
+                    eprintln!("Failed to exchange voucher code: {}", e);
+                }
+            }
+            if new_user {
+                //sendmsg to kafka
+
+                let mut map: HashMap<String, Value> = HashMap::new();
+                map.insert("user_id".to_string(), json!(user_account.user_id));
+                map.insert("type".to_string(), json!("user"));
+                match kafka_handler.send_message("user", map).await {
+                    Ok(_) => {
+                        println!("send kafka success");
+                    }
+                    Err(e) => {
+                        println!("send kafka failed: {}", e);
+                    }
+                }
+            }
+
+            return Ok(user_account.token.unwrap());
+        }
+        Err(e) => {
+            return Err(e);
+        }
+    };
+}
+
+//pin code verification
+pub async fn get_or_generate_pincode(
+    email: &str,
+    db: web::Data<mysql_utils::DatabaseManager>,
+    email_manager: web::Data<EmailManager>,
+) -> Result<String, sqlx::Error> {
+    // Check if pincode exists for this email
+    match db.get_pincode_by_email(email).await {
+        Ok(Some(user_pincode)) => {
+            let now = chrono::Utc::now();
+            let duration = now.signed_duration_since(user_pincode.created_at);
+
+            // If pincode was created less than 10 minutes ago, return existing
+            if duration.num_minutes() < 10 {
+                return Ok(user_pincode.pincode.clone());
+            } else {
+                let new_pincode = format!("{:08}", rand::random::<u32>() % 100000000);
+                match db.insert_update_pincode(new_pincode.as_str(), email).await {
+                    Ok(_) => (),
+                    Err(e) => return Err(e),
+                }
+
+                // Send email with new pincode
+                match email_manager.send_email_to(email).await {
+                    Ok(_) => {
+                        println!("Email sent successfully");
+                    }
+                    Err(e) => {
+                        error!("Failed to send email: {}", e);
+                        return Err(sqlx::Error::Protocol(format!(
+                            "Failed to send email: {}",
+                            e
+                        )));
+                        // return Err(anyhow::Error::from("Failed to send email"));
+                    }
+                };
+                Ok(new_pincode)
+            }
+        }
+        Ok(None) => {
+            // No existing pincode found, will generate new one below
+            let new_pincode = format!("{:08}", rand::random::<u32>() % 100000000);
+            match db.insert_update_pincode(new_pincode.as_str(), email).await {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            }?;
+            Ok(new_pincode)
+        }
+        Err(e) => return Err(e),
+    }
+}
+//
 pub async fn exchange_voucher_code(user_id: i32, voucher_code: String) -> Result<(), Error> {
     let client = reqwest::Client::new();
 
     let marketing_server_url =
         env::var("MARKETING_SERVER_URL").unwrap_or_else(|_| MarketingServerUrl.to_string());
+
+    println!("current marketing url {}", marketing_server_url);
     let response = client
         .post(format!(
             "http://{}/api/v1/voucher/exchange",
@@ -100,14 +192,6 @@ fn create_github_oauth_client() -> BasicClient {
         env::var("GITHUB_CLIENT_SECRET")
             .expect("Missing GITHUB_CLIENT_SECRET environment variable."),
     );
-    // let auth_url = AuthUrl::new("
-    // let client = BasicClient::new(
-    //         ClientId::new("your_client_id".to_string()),
-    //         Some(ClientSecret::new("your_client_secret".to_string())),
-    //         AuthUrl::new("https://github.com/login/oauth/authorize".to_string())?,
-    //         Some(TokenUrl::new("https://github.com/login/oauth/access_token".to_string())?)
-    //     )
-    //     .set_redirect_uri(RedirectUrl::new("http://localhost:8000/callback".to_string())?);
 
     let auth_url = AuthUrl::new("https://github.com/login/oauth/authorize".to_string())
         .expect("Invalid github authorization endpoint URL");
@@ -121,7 +205,7 @@ fn create_github_oauth_client() -> BasicClient {
         Some(token_url),
     )
     .set_redirect_uri(
-        RedirectUrl::new("http://localhost:8080/callback".to_string())
+        RedirectUrl::new("http://localhost:5173/auth/callback".to_string())
             .expect("Invalid redirect URL"),
     )
 }
@@ -152,69 +236,64 @@ fn create_oauth_client() -> BasicClient {
     )
 }
 
-// #[derive(Clone)]
-// struct AppState {
-//     oauth_client: BasicClient,
-//     http_client: HttpClient,
-// }
+#[derive(Deserialize, Debug)]
+struct Auth2CallbackParameters {
+    code: String,
+    state: String,
+}
 
-// #[derive(Serialize, Deserialize)]
-// struct Credentials {
-//     token: String,
-//     refresh_token: Option<String>,
-//     token_uri: String,
-//     client_id: String,
-//     client_secret: String,
-//     scopes: Vec<String>,
-// }
-
-#[get("/api/oauth2callback")]
+#[post("/api/v1/user/oauth2callback/{provider}")]
 async fn oauth2callback(
+    path: web::Path<(String,)>,
     oauth_client: web::Data<BasicClient>,
-    params: web::Query<oauth2::AuthorizationCode>,
-    session: Session,
+    web::Json(params): web::Json<Auth2CallbackParameters>,
+    // web::Query(params): web::Query<HashMap<String, String>>,
+    db: web::Data<mysql_utils::DatabaseManager>,
+    kafka_handler: web::Data<kafka::KafkaHandler>,
 ) -> Result<HttpResponse, Error> {
     println!("oauth2callback");
     println!("{:?}", params);
-    // let token = oauth_client
-    //     .exchange_code(oauth2::AuthorizationCode::new(params.code.clone()))
-    //     .request_async(oauth2::reqwest::async_http_client)
-    //     .await
-    //     .map_err(|_| HttpResponse::InternalServerError())?;
 
-    Ok(HttpResponse::Ok().body("Everything went well!"))
+    let voucher_code = params.state;
+    println!("voucher_code: {}", voucher_code);
 
-    // // 验证CSRF令牌
-    // let csrf_token: String = session.get("csrf_token").unwrap().unwrap();
-    // if csrf_token != query.get("state").unwrap() {
-    //     return HttpResponse::BadRequest().body("Invalid CSRF token");
-    // }
+    let provider = path.into_inner().0;
+    match provider.as_str() {
+        "google" => Ok(HttpResponse::Ok().body("test")),
+        "github" => {
+            let token = oauth_client
+                .exchange_code(oauth2::AuthorizationCode::new(params.code))
+                .request_async(oauth2::reqwest::async_http_client)
+                .await
+                .map_err(|_| ErrorInternalServerError("Failed to exchange code"))?;
+            let user_info = get_github_emails(token.access_token().secret().as_str())
+                .await
+                .unwrap();
 
-    // // 交换授权码获取访问令牌
-    // let token_result = data.oauth_client
-    //     .exchange_code(oauth2::AuthorizationCode::new(query.get("code").unwrap().to_string()))
-    //     .request_async(oauth2::reqwest::async_http_client)
-    //     .await;
+            let primary_email = user_info
+                .iter()
+                .find(|e| e.primary)
+                .map(|e| &e.email)
+                .unwrap_or(&user_info[0].email);
+            println!("Got github user primary email: {}", primary_email);
 
-    // match token_result {
-    //     Ok(token) => {
-    //         // 存储凭证
-    //         let credentials = Credentials {
-    //             token: token.access_token().secr·et().to_string(),
-    //             refresh_token: token.refresh_token().map(|rt| rt.secret().to_string()),
-    //             token_uri: data.oauth_client.token_url().unwrap().to_string(),
-    //             client_id: data.oauth_client.client_id().unwrap().to_string(),
-    //             client_secret: data.oauth_client.client_secret().unwrap().to_string(),
-    //             scopes: token.scopes().unwrap().iter().map(|s| s.to_string()).collect(),
-    //         };
-    //         session.set("credentials", credentials).unwrap();
+            // db.create_update_user(primary_email.as_str()).await;
+            match generate_tokens(primary_email.to_string(), voucher_code, db, kafka_handler).await
+            {
+                Ok(topai_token) => {
+                    println!("start create update .......");
+                    return Ok(HttpResponse::Ok().json(topai_token));
+                }
+                Err(e) => {
+                    println!("Error creating or updating user: {}", e);
+                    return Err(ErrorInternalServerError(e.to_string()));
+                }
+            }
 
-    //         HttpResponse::Found()
-    //             .header("Location", "/test")
-    //             .finish()
-    //     },
-    //     Err(e) => HttpResponse::InternalServerError().body(format!("Error: {}", e)),
-    // }
+            // Ok(HttpResponse::Ok().json(token))
+        }
+        _ => Ok(HttpResponse::Ok().body("CURRENT PROVIDER NOT SUPPORTED")),
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -226,54 +305,21 @@ struct EmailParameters {
 async fn send_email(
     web::Json(params): web::Json<EmailParameters>,
     db: web::Data<mysql_utils::DatabaseManager>,
+    email_manager: web::Data<EmailManager>,
 ) -> impl Responder {
-    println!("++++++{:?}", params.email);
-
-    let glID = dotenv::var("GOOGLE_CLIENT_ID").unwrap();
-    println!(".{:?}", glID);
-    // 设置 AWS 客户端
-    let config = aws_config::load_from_env().await;
-    let client = Client::new(&config);
-
-    // todo need to generate code and store to mysql
-    let template_data = json!({
-        "name": params.email,
-        "pin_code": "12345678"
-    });
-
-    let template_data_str = serde_json::to_string(&template_data).unwrap();
-
-    // 创建电子邮件内容，使用模板
-    let email_content = EmailContent::builder()
-        .template(
-            Template::builder()
-                .template_name("TopAIPinCodeNotificationTest1") // 使用在 SES 控制台中创建的模板名称
-                .template_data(template_data_str)
-                .build(),
-        )
-        .build();
-
-    // 设置发件人和收件人
-    let sender = "support@topnetwork.ai";
-    // let recipient = "max1015070108@gmail.com";
-
-    // 发送邮件
-    let reponses = client
-        .send_email()
-        .from_email_address(sender)
-        .destination(Destination::builder().to_addresses(params.email).build())
-        .content(email_content)
-        .send()
-        .await;
-
-    println!("Email sent successfully {:?}", reponses);
-
-    // store pincode to mysql
-    // 1. email + created time
-    //TODO db.user_pincode
-    HttpResponse::Ok().json(json!({
-        "message": "PINCODE sent to email"
-    }))
+    match get_or_generate_pincode(params.email.as_str(), db, email_manager).await {
+        Ok(pincode) => {
+            println!("Pincode: {}", pincode);
+            HttpResponse::Ok().json(json!({
+                "message": "PINCODE sent to email"
+            }))
+        }
+        Err(e) => {
+            println!("Error generating pincode: {}", e);
+            // return ErrorInternalServerError(e.to_string());
+            HttpResponse::InternalServerError().body(format!("Failed to send_pincode: {}", e))
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -310,46 +356,38 @@ async fn verify_pincode(
     }
 
     println!("start create update .......");
-    match db.create_update_user(&params.email).await {
-        Ok((user_account, new_user)) => {
-            println!("start create_update_user {:?}", new_user);
 
-            //sync to vouch
-            if !params.ex_info.voucher_code.is_empty() {
-                // TODO: Upload voucher code to specified URL
-                // Implementation needed to post voucher_code to endpoint
-                if let Err(e) =
-                    exchange_voucher_code(user_account.user_id, params.ex_info.voucher_code).await
-                {
-                    eprintln!("Failed to exchange voucher code: {}", e);
-                }
-            }
-            if new_user {
-                //sendmsg to kafka
-
-                let mut map: HashMap<String, Value> = HashMap::new();
-                map.insert("user_id".to_string(), json!(user_account.user_id));
-                map.insert("type".to_string(), json!("user"));
-                kafka_handler.send_message("user", map).await.unwrap();
-            }
-
-            return HttpResponse::Ok().json(json!({
-                "topai_token": user_account.token
-            }));
+    match generate_tokens(
+        params.email.to_string(),
+        params.ex_info.voucher_code.to_string(),
+        db,
+        kafka_handler,
+    )
+    .await
+    {
+        Ok(topai_token) => {
+            println!("start create update .......");
+            return HttpResponse::Ok().json(topai_token);
         }
         Err(e) => {
+            println!("Error creating or updating user: {}", e);
             return HttpResponse::InternalServerError()
-                .body(format!("Failed to create user: {}", e))
+                .body(format!("Failed to create user: {}", e));
         }
-    };
-
-    //sendmsg to kafka
-
-    // HttpResponse::Ok().body("Pin code verified successfully")
+    }
 }
 
 #[get("/api/v1/user/oauth/init/{provider}")]
-async fn oauth_url(path: web::Path<(String,)>) -> impl Responder {
+async fn oauth_url(
+    path: web::Path<(String,)>,
+    web::Query(params): web::Query<HashMap<String, String>>,
+) -> impl Responder {
+    let voucher_code = params
+        .get("voucher_code")
+        .unwrap_or(&"".to_string())
+        .to_string();
+    println!("voucher_code: {}", voucher_code);
+
     let provider = path.into_inner().0;
     match provider.as_str() {
         "google" => {
@@ -370,14 +408,18 @@ async fn oauth_url(path: web::Path<(String,)>) -> impl Responder {
         "github" => {
             println!("match github......");
             let client = create_github_oauth_client();
+            let csrf_state = voucher_code;
             let (auth_url, _csrf_token) = client
-                .authorize_url(CsrfToken::new_random)
+                .authorize_url(move || CsrfToken::new(csrf_state.clone()))
                 .add_scope(Scope::new("user:email".to_string())) //.set_pkce_challenge(pkce_challenge)
                 .url();
 
             println!("Open this URL in your browser:\n{}", auth_url);
 
-            return HttpResponse::Ok().body(auth_url.to_string());
+            // return HttpResponse::Ok().body(auth_url.to_string());
+            return HttpResponse::Ok().json(json!({
+                "redirect_url": auth_url.to_string()
+            }));
         }
         _ => return HttpResponse::BadRequest().body("Unsupported provider"),
     };
@@ -406,12 +448,15 @@ async fn get_github_auth_url() -> impl Responder {
     let client = create_github_oauth_client();
     let (auth_url, _csrf_token) = client
         .authorize_url(CsrfToken::new_random)
-        .add_scope(Scope::new("user:email".to_string())) //.set_pkce_challenge(pkce_challenge)
+        .add_scope(Scope::new("user:email".to_string()))
+        .add_scope(Scope::new("read:user".to_string()))
         .url();
 
     println!("Open this URL in your browser:\n{}", auth_url);
 
-    HttpResponse::Ok().body(auth_url.to_string())
+    HttpResponse::Ok().json(json!({
+        "redirect_url": auth_url.to_string()
+    }))
 }
 
 #[get("/api/v1/user/userinfo")]
@@ -469,6 +514,33 @@ async fn get_user_by_token(
     }
 }
 
+async fn get_github_emails(access_token: &str) -> Result<Vec<EmailResponse>, Error> {
+    let client = reqwest::Client::new();
+    let response_text = client
+        .get("https://api.github.com/user/emails")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("User-Agent", "YOUR_APP_NAME")
+        .send()
+        .await
+        .map_err(|e| ErrorInternalServerError(format!("Failed to fetch emails: {}", e)))?
+        .text()
+        .await
+        .map_err(|e| ErrorInternalServerError(format!("Failed to parse response text: {}", e)))?;
+
+    let response: Vec<EmailResponse> = serde_json::from_str(&response_text)
+        .map_err(|e| ErrorInternalServerError(format!("Failed to parse email response: {}", e)))?;
+
+    Ok(response)
+}
+
+#[derive(Deserialize)]
+struct EmailResponse {
+    email: String,
+    primary: bool,
+    verified: bool,
+    visibility: Option<String>,
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let _ = env_logger::try_init();
@@ -493,9 +565,19 @@ async fn main() -> std::io::Result<()> {
     // For example, you might want to call some setup function on db_manager
     info!("starting web server...");
     println!("starting web server...");
+
+    //github auth client
+    let github_client = create_github_oauth_client();
+    let github_auth_client = web::Data::new(github_client);
+    //google auth client
+
+    //email manager
+    let email_manager = web::Data::new(EmailManager::new().await);
+
     HttpServer::new(move || {
         let cors = Cors::default()
             .allowed_origin("http://localhost:8080")
+            .allowed_origin("http://localhost:5173")
             .allowed_methods(vec!["GET", "POST"])
             .allowed_headers(vec![
                 actix_web::http::header::AUTHORIZATION,
@@ -511,10 +593,13 @@ async fn main() -> std::io::Result<()> {
             .service(get_user)
             .service(send_email)
             .service(oauth_url)
+            .service(oauth2callback)
             .service(verify_pincode)
             .service(get_user_by_token)
             .app_data(db_manager.clone())
             .app_data(kafka_handler.clone())
+            .app_data(github_auth_client.clone())
+            .app_data(email_manager.clone())
     })
     .bind("0.0.0.0:8000")?
     .run()

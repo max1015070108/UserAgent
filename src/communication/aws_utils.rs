@@ -3,10 +3,13 @@ use anyhow::Error;
 use aws_config;
 use aws_sdk_sesv2::operation::create_email_template::CreateEmailTemplateError;
 use aws_sdk_sesv2::types::EmailTemplateContent;
-use aws_sdk_sesv2::Client;
+use aws_sdk_sesv2::{
+    types::{Destination, EmailContent, Template},
+    Client,
+};
 use env_logger::Target::Stdout;
+use serde_json::json;
 use std::io::Write;
-
 pub struct EmailManager {
     pub file_path: std::path::PathBuf,
     client: Client,
@@ -51,11 +54,52 @@ impl EmailManager {
         Ok(())
     }
 
-    // fn update(&mut self, updated_data: String) {
-    //     self.data = updated_data;
-    // }
+    pub async fn send_email_to(&self, email: &str) -> Result<(), Error> {
+        let template_data = json!({
+            "name": email,
+            "pin_code": "",//get_or_generate_pincode(params.email.as_str(),db).await.unwrap(),
+        });
 
-    // fn send(&self) {
-    //     println!("Sending data: {}", self.data);
-    // }
+        let template_data_str = serde_json::to_string(&template_data).unwrap();
+
+        // 创建电子邮件内容，使用模板
+        let email_content = EmailContent::builder()
+            .template(
+                Template::builder()
+                    .template_name("TopAIPinCodeNotificationTest1") // 使用在 SES 控制台中创建的模板名称
+                    .template_data(template_data_str)
+                    .build(),
+            )
+            .build();
+
+        // 设置发件人和收件人
+        let sender = "support@topnetwork.ai";
+        // let recipient = "max1015070108@gmail.com";
+
+        match self
+            .client
+            .send_email()
+            .from_email_address(sender)
+            .destination(Destination::builder().to_addresses(email).build())
+            .content(email_content)
+            .send()
+            .await
+        {
+            Ok(response) => {
+                println!("Email sent successfully {:?}", response);
+                Ok(())
+            }
+            Err(e) => {
+                println!("Error sending email: {:?}", e);
+                return Err(e.into());
+            }
+        }
+
+        // store pincode to mysql
+        // 1. email + created time
+        // //TODO db.user_pincode
+        // HttpResponse::Ok().json(json!({
+        //     "message": "PINCODE sent to email"
+        // }))
+    }
 }
