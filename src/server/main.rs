@@ -37,7 +37,7 @@ const MARKETING_SERVER_URL: &str = "159.135.196.73:32756";
 
 //redirect url
 
-const REDIRECT_URL: &str = "localhost:5173";
+const REDIRECT_URL: &str = "http://localhost:5173";
 
 #[derive(Serialize, Deserialize)]
 struct UserInfo {
@@ -203,7 +203,7 @@ fn create_github_oauth_client() -> BasicClient {
     )
     .set_redirect_uri(
         //
-        RedirectUrl::new(format!("http://{}/auth/callback/github", redirect_uri))
+        RedirectUrl::new(format!("{}/auth/callback/github", redirect_uri))
             .expect("Invalid redirect URL"),
     )
 }
@@ -231,7 +231,7 @@ fn create_google_oauth_client() -> BasicClient {
         Some(token_url),
     )
     .set_redirect_uri(
-        RedirectUrl::new(format!("http://{}/auth/callback/google", redirect_uri))
+        RedirectUrl::new(format!("{}/auth/callback/google", redirect_uri))
             .expect("Invalid redirect URL"),
     )
 }
