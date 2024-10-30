@@ -588,27 +588,28 @@ async fn get_user_by_token(
 
 async fn get_github_emails(access_token: &str) -> Result<Vec<EmailResponse>, Error> {
     // let client = reqwest::Client::new();
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30)) // 添加超时
-        .danger_accept_invalid_certs(true) // 仅开发环境使用！
-        .build()
-        .map_err(|e| ErrorInternalServerError(format!("Failed to build client: {}", e)))?;
+    // let client = reqwest::Client::builder()
+    //     .timeout(Duration::from_secs(30)) // 添加超时
+    //     .danger_accept_invalid_certs(true) // 仅开发环境使用！
+    //     .build()
+    //     .map_err(|e| ErrorInternalServerError(format!("Failed to build client: {}", e)))?;
 
-    let response_text = client
-        .get("https://api.github.com/user/emails")
-        .header("Authorization", format!("Bearer {}", access_token))
-        .header("User-Agent", "YOUR_APP_NAME")
-        .send()
-        .await
-        .map_err(|e| ErrorInternalServerError(format!("Failed to fetch emails: {}", e)))?
-        .text()
-        .await
-        .map_err(|e| ErrorInternalServerError(format!("Failed to parse response text: {}", e)))?;
+    // let response_text = client
+    //     .get("https://api.github.com/user/emails")
+    //     .header("Authorization", format!("Bearer {}", access_token))
+    //     .header("User-Agent", "YOUR_APP_NAME")
+    //     .send()
+    //     .await
+    //     .map_err(|e| ErrorInternalServerError(format!("Failed to fetch emails: {}", e)))?
+    //     .text()
+    //     .await
+    //     .map_err(|e| ErrorInternalServerError(format!("Failed to parse response text: {}", e)))?;
 
-    let response: Vec<EmailResponse> = serde_json::from_str(&response_text)
-        .map_err(|e| ErrorInternalServerError(format!("Failed to parse email response: {}", e)))?;
+    // let response: Vec<EmailResponse> = serde_json::from_str(&response_text)
+    //     .map_err(|e| ErrorInternalServerError(format!("Failed to parse email response: {}", e)))?;
 
-    Ok(response)
+    // Ok(response)
+    Ok(())
 }
 
 async fn get_google_emails(access_token: &str) -> Result<String, Error> {
