@@ -375,36 +375,38 @@ async fn email_login_register(
     //
     //8位纯数字的随机数
     // let correct_pin_code = format!("{:08}", rand::random::<u32>() % 100000000);
-    let correct_pin_code = "12345678";
+    // let correct_pin_code = "12345678";
 
     // get pincode from mysql and check if expired
-    // let pin_code = match db.get_pincode_by_email(params.email.as_str()).await {
-    //     Ok(pincode) => match pincode {
-    //         Some(user_pincode) => {
-    //             let now = chrono::Utc::now();
-    //             let duration = now.signed_duration_since(user_pincode.created_at);
+    let pin_code = match db.get_pincode_by_email(params.email.as_str()).await {
+        Ok(pincode) => match pincode {
+            Some(user_pincode) => {
+                let now = chrono::Utc::now();
+                let duration = now.signed_duration_since(user_pincode.created_at);
 
-    //             if duration.num_minutes() >= 10 {
-    //                 return HttpResponse::BadRequest().body("Pincode expired");
-    //             }
-    //             user_pincode.pincode
-    //         }
-    //         None => {
-    //             return HttpResponse::BadRequest().body("No pincode found for this email");
-    //         }
-    //     },
-    //     Err(e) => {
-    //         println!("Error getting pincode: {}", e);
-    //         return HttpResponse::InternalServerError()
-    //             .body(format!("Failed to get pincode: {}", e));
-    //     }
-    // };
+                if duration.num_minutes() >= 10 {
+                    return HttpResponse::BadRequest().body("Pincode expired");
+                }
+                user_pincode.pincode
+            }
+            None => {
+                return HttpResponse::BadRequest().body("No pincode found for this email");
+            }
+        },
+        Err(e) => {
+            println!("Error getting pincode: {}", e);
+            return HttpResponse::InternalServerError()
+                .body(format!("Failed to get pincode: {}", e));
+        }
+    };
 
     // if params.pin_code != pin_code {
     //     return HttpResponse::Unauthorized().body("mismatch Invalid pin code");
     // }
     if params.pin_code != correct_pin_code {
-        return HttpResponse::Unauthorized().body("mismatch Invalid pin code");
+        return HttpResponse::Unauthorized().json(json!({
+            "message": "mismatch Invalid pin code"
+        }));
     }
 
     println!("start create update .......");
@@ -419,7 +421,9 @@ async fn email_login_register(
     {
         Ok(topai_token) => {
             println!("start create update .......");
-            return HttpResponse::Ok().json(topai_token);
+            return HttpResponse::Ok().json(json!({
+                "topai_token": topai_token
+            }));
         }
         Err(e) => {
             println!("Error creating or updating user: {}", e);
