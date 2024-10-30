@@ -3,13 +3,10 @@ use actix_session::{Session, SessionMiddleware};
 use actix_web::cookie::Key;
 use actix_web::error::ErrorInternalServerError;
 use actix_web::{
-    get, http::header, middleware::Logger, post, web, App, Error, HttpRequest, HttpResponse,
-    HttpServer, Responder,
+    get, middleware::Logger, post, web, App, Error, HttpRequest, HttpResponse, HttpServer,
+    Responder,
 };
 
-use actix_web_httpauth::headers::authorization::{Authorization, Bearer};
-
-use mysql::params;
 use oauth2::TokenResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,24 +16,17 @@ use log::*;
 use serde_json::json;
 use std::env;
 // email part
-use aws_config;
-use aws_sdk_sesv2::error::BuildError;
 
-use aws_sdk_sesv2::{
-    types::{Destination, EmailContent, Template},
-    Client,
-};
 use reqwest;
 use std::collections::HashMap;
 
 use oauth2::{
-    basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
-    PkceCodeChallenge, RedirectUrl, Scope, TokenUrl,
+    basic::BasicClient, AuthUrl, ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope, TokenUrl,
 };
 
-use UserAgent::communication::aws_utils::{self, EmailManager};
+use UserAgent::communication::aws_utils::EmailManager;
 // use DatabaseManager
-use UserAgent::database::mysql_utils::{self, UserPincode};
+use UserAgent::database::mysql_utils::{self};
 //mq
 use UserAgent::mq::kafka;
 
@@ -44,6 +34,11 @@ use std::time::Duration;
 
 // const MarketingServerUrl: &str = "topai-marketing-server.demo-ray.svc.cluster.local/api/v1/voucher/exchange:80";
 const MARKETING_SERVER_URL: &str = "159.135.196.73:32756";
+
+//redirect url
+
+const REDIRECT_URL: &str = "localhost:5173";
+
 #[derive(Serialize, Deserialize)]
 struct UserInfo {
     name: String,
@@ -199,6 +194,7 @@ fn create_github_oauth_client() -> BasicClient {
     let token_url = TokenUrl::new("https://github.com/login/oauth/access_token".to_string())
         .expect("Invalid github token endpoint URL");
 
+    let redirect_uri = env::var("REDIRECT_URL").unwrap_or_else(|_| REDIRECT_URL.to_string());
     BasicClient::new(
         github_client_id,
         Some(github_client_secret),
@@ -206,7 +202,8 @@ fn create_github_oauth_client() -> BasicClient {
         Some(token_url),
     )
     .set_redirect_uri(
-        RedirectUrl::new("http://localhost:5173/auth/callback/github".to_string())
+        //
+        RedirectUrl::new(format!("http://{}/auth/callback/github", redirect_uri))
             .expect("Invalid redirect URL"),
     )
 }
@@ -225,6 +222,8 @@ fn create_google_oauth_client() -> BasicClient {
     let token_url = TokenUrl::new("https://www.googleapis.com/oauth2/v3/token".to_string())
         .expect("Invalid token endpoint URL");
 
+    let redirect_uri = env::var("REDIRECT_URL").unwrap_or_else(|_| REDIRECT_URL.to_string());
+
     BasicClient::new(
         google_client_id,
         Some(google_client_secret),
@@ -232,7 +231,7 @@ fn create_google_oauth_client() -> BasicClient {
         Some(token_url),
     )
     .set_redirect_uri(
-        RedirectUrl::new("http://localhost:5173/auth/callback/google".to_string())
+        RedirectUrl::new(format!("http://{}/auth/callback/google", redirect_uri))
             .expect("Invalid redirect URL"),
     )
 }
@@ -246,14 +245,24 @@ struct Auth2CallbackParameters {
 #[post("/api/v1/user/oauth2callback/{provider}")]
 async fn oauth2callback(
     path: web::Path<(String,)>,
-    oauth_client: web::Data<BasicClient>,
     web::Json(params): web::Json<Auth2CallbackParameters>,
-    // web::Query(params): web::Query<HashMap<String, String>>,
     db: web::Data<mysql_utils::DatabaseManager>,
+    google_client: web::Data<GoogleClient>, // 只会匹配 GoogleClient
+    github_client: web::Data<GithubClient>,
     kafka_handler: web::Data<kafka::KafkaHandler>,
 ) -> Result<HttpResponse, Error> {
     println!("oauth2callback");
-    println!("{:?}", params);
+    println!("{:?}", params.code);
+
+    // 检查 code 是否包含非法字符
+    if !params
+        .code
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        println!("Code contains invalid characters");
+        return Err(ErrorInternalServerError("Invalid code format"));
+    }
 
     let voucher_code = params.state;
     println!("voucher_code: {}", voucher_code);
@@ -262,11 +271,24 @@ async fn oauth2callback(
     match provider.as_str() {
         "google" => Ok(HttpResponse::Ok().body("test")),
         "github" => {
-            let token = oauth_client
+            println!("github start exchange codes {:?}", params.code);
+            let token = match github_client
+                .0
                 .exchange_code(oauth2::AuthorizationCode::new(params.code))
                 .request_async(oauth2::reqwest::async_http_client)
                 .await
-                .map_err(|_| ErrorInternalServerError("Failed to exchange code"))?;
+            {
+                Ok(token) => token,
+                Err(e) => {
+                    println!("Failed to exchange code: {:?}", e);
+                    return Ok(HttpResponse::InternalServerError().json(json!({
+                        "error": format!("Failed to exchange code: {:?}", e)
+                    })));
+                }
+            };
+            // }
+            // .map_err(|_| ErrorInternalServerError("Failed to exchange code"))?;
+
             let user_info = get_github_emails(token.access_token().secret().as_str())
                 .await
                 .unwrap();
@@ -436,19 +458,23 @@ async fn email_login_register(
 async fn oauth_url_init(
     path: web::Path<(String,)>,
     web::Query(params): web::Query<HashMap<String, String>>,
+    google_client: web::Data<GoogleClient>, // 只会匹配 GoogleClient
+    github_client: web::Data<GithubClient>,
+    // google_client: web::Data<BasicClient>,
 ) -> impl Responder {
     let voucher_code = params
         .get("voucher_code")
         .unwrap_or(&"".to_string())
         .to_string();
-    println!("voucher_code: {}", voucher_code);
+    println!("init voucher_code: {}", voucher_code);
 
     let provider = path.into_inner().0;
     match provider.as_str() {
         "google" => {
             println!("match google......");
             let client = create_google_oauth_client();
-            let (auth_url, _csrf_token) = client
+            let (auth_url, _csrf_token) = google_client
+                .0
                 // .authorize_url(CsrfToken::new_random)
                 .authorize_url(move || CsrfToken::new(voucher_code.clone()))
                 .add_scope(Scope::new(
@@ -462,12 +488,15 @@ async fn oauth_url_init(
             return HttpResponse::Ok().json(json!({
                 "auth_url": auth_url.to_string()
             }));
+
+            // return HttpResponse::Ok().body("hello");
         }
         "github" => {
             println!("match github......");
-            let client = create_github_oauth_client();
+            // let client = create_github_oauth_client();
             let csrf_state = voucher_code;
-            let (auth_url, _csrf_token) = client
+            let (auth_url, _csrf_token) = github_client
+                .0
                 .authorize_url(move || CsrfToken::new(csrf_state.clone()))
                 .add_scope(Scope::new("user:email".to_string())) //.set_pkce_challenge(pkce_challenge)
                 .url();
@@ -539,7 +568,11 @@ async fn get_user_by_email(
 ) -> impl Responder {
     let email = match params.get("email") {
         Some(email) => email,
-        None => return HttpResponse::BadRequest().body("Missing email parameter"),
+        None => {
+            return HttpResponse::Ok().json(json!({
+                "error": "Missing email parameter"
+            }));
+        }
     };
     match db.get_user_by_email(email.as_str()).await {
         Ok(user) => HttpResponse::Ok().json(user),
@@ -653,31 +686,33 @@ async fn get_google_emails(access_token: &str) -> Result<String, Error> {
     }
 }
 
-// #[post("/api/v1/user/logout")]
-// async fn logout(req: HttpRequest, db: web::Data<mysql_utils::DatabaseManager>) -> impl Responder {
-//     let auth_header = match req.headers().get("Authorization") {
-//         Some(header) => match header.to_str() {
-//             Ok(str) => str,
-//             Err(_) => {
-//                 return HttpResponse::Unauthorized().body("Invalid authorization header format")
-//             }
-//         },
-//         None => return HttpResponse::Unauthorized().body("Missing authorization header"),
-//     };
+#[post("/api/v1/user/logout")]
+async fn logout(req: HttpRequest, db: web::Data<mysql_utils::DatabaseManager>) -> impl Responder {
+    let auth_header = match req.headers().get("Authorization") {
+        Some(header) => match header.to_str() {
+            Ok(str) => str,
+            Err(_) => {
+                return HttpResponse::Unauthorized().body("Invalid authorization header format")
+            }
+        },
+        None => return HttpResponse::Unauthorized().body("Missing authorization header"),
+    };
 
-//     if !auth_header.starts_with("Bearer ") {
-//         return HttpResponse::Unauthorized().body("Invalid token format");
-//     }
+    if !auth_header.starts_with("Bearer ") {
+        return HttpResponse::Unauthorized().body("Invalid token format");
+    }
 
-//     let token = auth_header.split(" ").nth(1).unwrap_or("");
+    let token = auth_header.split(" ").nth(1).unwrap_or("");
 
-//     match db.invalidate_token(token).await {
-//         Ok(_) => HttpResponse::Ok().json(json!({
-//             "message": "Successfully logged out"
-//         })),
-//         Err(e) => HttpResponse::InternalServerError().body(format!("Failed to logout: {}", e)),
-//     }
-// }
+    match db.invalidate_token(token).await {
+        Ok(_) => HttpResponse::Ok().json(json!({
+            "message": "Successfully logged out"
+        })),
+        Err(e) => HttpResponse::Ok().json(json!({
+            "error": format!("Failed to logout: {}", e),
+        })),
+    }
+}
 
 #[derive(Deserialize)]
 struct EmailResponse {
@@ -686,6 +721,13 @@ struct EmailResponse {
     verified: bool,
     visibility: Option<String>,
 }
+
+// 在 Actix-web 中，当有多个相同类型的 `web::Data<T>` 时，依赖注入是按照参数声明的顺序进行匹配的。这就是为什么建议使用自定义类型来区分不同的客户端。
+#[derive(Debug)]
+struct GoogleClient(BasicClient);
+
+#[derive(Debug)]
+struct GithubClient(BasicClient);
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -712,26 +754,53 @@ async fn main() -> std::io::Result<()> {
     info!("starting web server...");
     println!("starting web server...");
 
+    let github_client = web::Data::new(GithubClient(create_github_oauth_client()));
+    let google_client = web::Data::new(GoogleClient(create_google_oauth_client()));
+
     //github auth client
-    let github_client = create_github_oauth_client();
-    let github_auth_client = web::Data::new(github_client);
+    // let github_client = match create_github_oauth_client() {
+    //     client => {
+    //         println!("Successfully created GitHub OAuth client");
+    //         web::Data::new(client)
+    //     }
+    // };
+
     //google auth client
-    let google_client = create_google_oauth_client();
-    let google_auth_client = web::Data::new(google_client);
+    // let google_client = match create_google_oauth_client() {
+    //     client => {
+    //         println!("Successfully created Google OAuth client");
+    //         web::Data::new(client)
+    //     }
+    // };
+
     //email manager
     let email_manager = web::Data::new(EmailManager::new().await);
 
     HttpServer::new(move || {
         let cors = Cors::default()
-            .allowed_origin("http://localhost:8080")
             .allowed_origin("http://localhost:5173")
-            .allowed_methods(vec!["GET", "POST"])
+            .allowed_methods(vec!["GET", "POST", "OPTIONS"])
             .allowed_headers(vec![
                 actix_web::http::header::AUTHORIZATION,
                 actix_web::http::header::ACCEPT,
+                actix_web::http::header::CONTENT_TYPE,
             ])
             .allowed_header(actix_web::http::header::CONTENT_TYPE)
+            .supports_credentials()
             .max_age(3600);
+
+        // let cors = Cors::default()
+        //     // 允许多个源
+        //     .allowed_origin("http://localhost:5173")
+        //     .allowed_origin("http://127.0.0.1:5173")
+        //     // 允许所有的请求头
+        //     .allow_any_header()
+        //     // 允许所有的请求方法
+        //     .allow_any_method()
+        //     // 允许特定的路
+        //     // 允许携带认证信息
+        //     .supports_credentials();
+        // let cors = Cors::permissive();
         App::new()
             .wrap(cors)
             .wrap(Logger::default())
@@ -746,8 +815,8 @@ async fn main() -> std::io::Result<()> {
             .service(get_user_by_email)
             .app_data(db_manager.clone())
             .app_data(kafka_handler.clone())
-            .app_data(github_auth_client.clone())
-            .app_data(google_auth_client.clone())
+            .app_data(github_client.clone())
+            .app_data(google_client.clone())
             .app_data(email_manager.clone())
     })
     .bind("0.0.0.0:8000")?

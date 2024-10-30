@@ -373,15 +373,15 @@ impl DatabaseManager {
         Ok(result)
     }
 
-    pub async fn invalidate_token(&self, user_id: i32) -> Result<()> {
+    pub async fn invalidate_token(&self, token: &str) -> Result<()> {
         sqlx::query(
             r#"
             UPDATE USER_ACCOUNT
             SET token = NULL
-            WHERE user_id = ?
+            WHERE token = ?
             "#,
         )
-        .bind(user_id)
+        .bind(token)
         .execute(&self.pool)
         .await?;
 

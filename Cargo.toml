@@ -29,7 +29,7 @@ chrono = { version = "0.4", features = ["serde"] }
 rdkafka = { version = "0.31", features = ["cmake-build"] }
 rand = "0.8.5"
 actix-web-httpauth = "0.8.2"
-reqwest = { version = "0.12.8", features = ["rustls-tls"] }
+reqwest = "0.12.8" #{ version = "0.12.8", features = ["rustls-tls"] }
 
 
 # [lib]
