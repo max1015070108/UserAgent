@@ -204,13 +204,13 @@ fn create_github_oauth_client() -> BasicClient {
         Some(token_url),
     )
     .set_redirect_uri(
-        RedirectUrl::new("http://localhost:5173/auth/callback".to_string())
+        RedirectUrl::new("http://localhost:5173/auth/callback/github".to_string())
             .expect("Invalid redirect URL"),
     )
 }
 
 //google oauth client
-fn create_oauth_client() -> BasicClient {
+fn create_google_oauth_client() -> BasicClient {
     let google_client_id = ClientId::new(
         env::var("GOOGLE_CLIENT_ID").expect("Missing GOOGLE_CLIENT_ID environment variable."),
     );
@@ -230,7 +230,7 @@ fn create_oauth_client() -> BasicClient {
         Some(token_url),
     )
     .set_redirect_uri(
-        RedirectUrl::new("http://localhost:8080/callback".to_string())
+        RedirectUrl::new("http://localhost:5173/auth/callback/google".to_string())
             .expect("Invalid redirect URL"),
     )
 }
@@ -361,10 +361,10 @@ struct PinCodeVerification {
 }
 
 /**
-* verifying pincode
+* email_login_register
 **/
 #[post("/api/v1/user/auth/email/login_register")]
-async fn verify_pincode(
+async fn email_login_register(
     web::Json(params): web::Json<PinCodeVerification>,
     db: web::Data<mysql_utils::DatabaseManager>,
     kafka_handler: web::Data<kafka::KafkaHandler>,
@@ -442,9 +442,10 @@ async fn oauth_url(
     match provider.as_str() {
         "google" => {
             println!("match google......");
-            let client = create_oauth_client();
+            let client = create_google_oauth_client();
             let (auth_url, _csrf_token) = client
-                .authorize_url(CsrfToken::new_random)
+                // .authorize_url(CsrfToken::new_random)
+                .authorize_url(move || CsrfToken::new(voucher_code.clone()))
                 .add_scope(Scope::new(
                     "https://www.googleapis.com/auth/userinfo.email".to_string(),
                 ))
@@ -479,7 +480,7 @@ async fn oauth_url(
 
 #[get("/api/v1/user/auth_google_url")]
 async fn get_auth_url() -> impl Responder {
-    let client = create_oauth_client();
+    let client = create_google_oauth_client();
     let (auth_url, _csrf_token) = client
         .authorize_url(CsrfToken::new_random)
         .add_scope(Scope::new(
@@ -518,6 +519,25 @@ async fn get_user() -> impl Responder {
         email: "johndoe@example.com".to_string(),
     };
     HttpResponse::Ok().json(user)
+}
+
+#[get("/api/v1/user/getuserbyemail")]
+async fn get_user_by_email(
+    web::Query(params): web::Query<HashMap<String, String>>,
+    db: web::Data<mysql_utils::DatabaseManager>,
+) -> impl Responder {
+    let email = match params.get("email") {
+        Some(email) => email,
+        None => return HttpResponse::BadRequest().body("Missing email parameter"),
+    };
+    match db.get_user_by_email(email.as_str()).await {
+        Ok(user) => HttpResponse::Ok().json(user),
+        Err(e) => {
+            println!("Error getting user by email: {}", e);
+            HttpResponse::InternalServerError().body(format!("Failed to get user: {}", e))
+        }
+    }
+    // HttpResponse::Ok().json(user)
 }
 
 #[get("/api/v1/user/userbytoken")]
@@ -583,6 +603,28 @@ async fn get_github_emails(access_token: &str) -> Result<Vec<EmailResponse>, Err
     Ok(response)
 }
 
+async fn get_google_emails(access_token: &str) -> Result<String, Error> {
+    let client = reqwest::Client::new();
+    let response_text = client
+        .get("https://www.googleapis.com/oauth2/v2/userinfo")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .map_err(|e| ErrorInternalServerError(format!("Failed to fetch google user info: {}", e)))?
+        .text()
+        .await
+        .map_err(|e| ErrorInternalServerError(format!("Failed to parse response text: {}", e)))?;
+
+    let user_info: Value = serde_json::from_str(&response_text).map_err(|e| {
+        ErrorInternalServerError(format!("Failed to parse user info response: {}", e))
+    })?;
+
+    match user_info.get("email") {
+        Some(email) => Ok(email.as_str().unwrap_or("").to_string()),
+        None => Err(ErrorInternalServerError("Email not found in response")),
+    }
+}
+
 #[derive(Deserialize)]
 struct EmailResponse {
     email: String,
@@ -602,7 +644,7 @@ async fn main() -> std::io::Result<()> {
     let db_manager = web::Data::new(_db_manager);
     db_manager.create_table().await.unwrap();
 
-    //kafka obj
+    // kafka obj
     let kafka_obj = match kafka::KafkaHandler::new(
         env::var("BROKER").expect("broker must be set").as_str(),
         kafka::KAFKA_TOPIC,
@@ -620,7 +662,8 @@ async fn main() -> std::io::Result<()> {
     let github_client = create_github_oauth_client();
     let github_auth_client = web::Data::new(github_client);
     //google auth client
-
+    let google_client = create_google_oauth_client();
+    let google_auth_client = web::Data::new(google_client);
     //email manager
     let email_manager = web::Data::new(EmailManager::new().await);
 
@@ -644,11 +687,13 @@ async fn main() -> std::io::Result<()> {
             .service(send_email)
             .service(oauth_url)
             .service(oauth2callback)
-            .service(verify_pincode)
+            .service(email_login_register)
             .service(get_user_by_token)
+            .service(get_user_by_email)
             .app_data(db_manager.clone())
             .app_data(kafka_handler.clone())
             .app_data(github_auth_client.clone())
+            .app_data(google_auth_client.clone())
             .app_data(email_manager.clone())
     })
     .bind("0.0.0.0:8000")?
