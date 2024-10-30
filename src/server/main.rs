@@ -40,6 +40,8 @@ use UserAgent::database::mysql_utils::{self, UserPincode};
 //mq
 use UserAgent::mq::kafka;
 
+use std::time::Duration;
+
 // const MarketingServerUrl: &str = "topai-marketing-server.demo-ray.svc.cluster.local/api/v1/voucher/exchange:80";
 const MarketingServerUrl: &str = "159.135.196.73:32756";
 #[derive(Serialize, Deserialize)]
@@ -585,7 +587,13 @@ async fn get_user_by_token(
 }
 
 async fn get_github_emails(access_token: &str) -> Result<Vec<EmailResponse>, Error> {
-    let client = reqwest::Client::new();
+    // let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30)) // 添加超时
+        .danger_accept_invalid_certs(true) // 仅开发环境使用！
+        .build()
+        .map_err(|e| ErrorInternalServerError(format!("Failed to build client: {}", e)))?;
+
     let response_text = client
         .get("https://api.github.com/user/emails")
         .header("Authorization", format!("Bearer {}", access_token))
