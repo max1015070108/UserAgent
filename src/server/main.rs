@@ -378,7 +378,7 @@ async fn email_login_register(
     // let correct_pin_code = "12345678";
 
     // get pincode from mysql and check if expired
-    let pin_code = match db.get_pincode_by_email(params.email.as_str()).await {
+    let correct_pin_code = match db.get_pincode_by_email(params.email.as_str()).await {
         Ok(pincode) => match pincode {
             Some(user_pincode) => {
                 let now = chrono::Utc::now();
