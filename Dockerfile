@@ -19,7 +19,11 @@ FROM ubuntu:22.04
 
 # Install runtime dependencies and development tools
 RUN apt-get update && \
-    apt-get install -y libssl-dev pkg-config net-tools lsof
+    apt-get install -y libssl-dev pkg-config net-tools lsof ca-certificates
+
+# Add custom CA certificates if needed
+COPY certs/custom-ca.crt /usr/local/share/ca-certificates/
+RUN update-ca-certificates
 
 # Set environment variables
 ENV GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}

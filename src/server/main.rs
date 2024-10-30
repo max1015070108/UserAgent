@@ -633,6 +633,32 @@ async fn get_google_emails(access_token: &str) -> Result<String, Error> {
     }
 }
 
+// #[post("/api/v1/user/logout")]
+// async fn logout(req: HttpRequest, db: web::Data<mysql_utils::DatabaseManager>) -> impl Responder {
+//     let auth_header = match req.headers().get("Authorization") {
+//         Some(header) => match header.to_str() {
+//             Ok(str) => str,
+//             Err(_) => {
+//                 return HttpResponse::Unauthorized().body("Invalid authorization header format")
+//             }
+//         },
+//         None => return HttpResponse::Unauthorized().body("Missing authorization header"),
+//     };
+
+//     if !auth_header.starts_with("Bearer ") {
+//         return HttpResponse::Unauthorized().body("Invalid token format");
+//     }
+
+//     let token = auth_header.split(" ").nth(1).unwrap_or("");
+
+//     match db.invalidate_token(token).await {
+//         Ok(_) => HttpResponse::Ok().json(json!({
+//             "message": "Successfully logged out"
+//         })),
+//         Err(e) => HttpResponse::InternalServerError().body(format!("Failed to logout: {}", e)),
+//     }
+// }
+
 #[derive(Deserialize)]
 struct EmailResponse {
     email: String,
