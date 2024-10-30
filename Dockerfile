@@ -22,7 +22,7 @@ RUN apt-get update && \
     apt-get install -y libssl-dev pkg-config net-tools lsof ca-certificates
 
 # Add custom CA certificates if needed
-COPY certs/custom-ca.crt /usr/local/share/ca-certificates/
+COPY --from=builder /usr/src/myapp/certs/custom-ca.crt /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
 # Set environment variables
