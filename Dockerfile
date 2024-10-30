@@ -2,7 +2,7 @@ FROM ubuntu:22.04 as builder
 
 # Install dependencies
 RUN apt-get update && \
-    apt-get install -y curl build-essential libssl-dev pkg-config cmake
+    apt-get install -y curl build-essential libssl-dev pkg-config cmake ca-certificates
 
 # Install Rust
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
