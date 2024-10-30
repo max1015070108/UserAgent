@@ -43,7 +43,7 @@ use UserAgent::mq::kafka;
 use std::time::Duration;
 
 // const MarketingServerUrl: &str = "topai-marketing-server.demo-ray.svc.cluster.local/api/v1/voucher/exchange:80";
-const MarketingServerUrl: &str = "159.135.196.73:32756";
+const MARKETING_SERVER_URL: &str = "159.135.196.73:32756";
 #[derive(Serialize, Deserialize)]
 struct UserInfo {
     name: String,
@@ -148,7 +148,7 @@ pub async fn exchange_voucher_code(user_id: i32, voucher_code: String) -> Result
     let client = reqwest::Client::new();
 
     let marketing_server_url =
-        env::var("MARKETING_SERVER_URL").unwrap_or_else(|_| MarketingServerUrl.to_string());
+        env::var("MARKETING_SERVER_URL").unwrap_or_else(|_| MARKETING_SERVER_URL.to_string());
 
     println!("current marketing url {}", marketing_server_url);
     let response = client
@@ -283,17 +283,23 @@ async fn oauth2callback(
             {
                 Ok(topai_token) => {
                     println!("start create update .......");
-                    return Ok(HttpResponse::Ok().json(topai_token));
+                    return Ok(HttpResponse::Ok().json(json!({
+                        "topai_token": topai_token
+                    })));
                 }
                 Err(e) => {
                     println!("Error creating or updating user: {}", e);
-                    return Err(ErrorInternalServerError(e.to_string()));
+                    return Ok(HttpResponse::InternalServerError().json(json!({
+                        "error": e.to_string()
+                    })));
                 }
             }
 
             // Ok(HttpResponse::Ok().json(token))
         }
-        _ => Ok(HttpResponse::Ok().body("CURRENT PROVIDER NOT SUPPORTED")),
+        _ => Ok(HttpResponse::Ok().json(json!({
+            "message": "CURRENT PROVIDER NOT SUPPORTED"
+        }))),
     }
 }
 
@@ -308,27 +314,12 @@ async fn send_email(
     db: web::Data<mysql_utils::DatabaseManager>,
     email_manager: web::Data<EmailManager>,
 ) -> impl Responder {
-    // match get_or_generate_pincode(params.email.as_str(), db, email_manager).await {
-    //     Ok(pincode) => {
-    //         println!("Pincode: {}", pincode);
-    //         HttpResponse::Ok().json(json!({
-    //             "message": "PINCODE sent to email"
-    //         }))
-    //     }
-    //     Err(e) => {
-    //         println!("Error generating pincode: {}", e);
-    //         // return ErrorInternalServerError(e.to_string());
-    //         HttpResponse::InternalServerError().body(format!("Failed to send_pincode: {}", e))
-    //     }
-    // }
-    // Send email with new pincode
-    //
     let new_pincode = match get_or_generate_pincode(params.email.as_str(), db).await {
         Ok(pincode) => pincode,
         Err(e) => {
             error!("Error generating pincode: {}", e);
             return HttpResponse::InternalServerError()
-                .body(format!("Failed to generate_pincode: {}", e));
+                .json(json!({ "error": format!("Failed to generate_pincode: {}", e) }));
         }
     };
 
@@ -344,7 +335,9 @@ async fn send_email(
         }
         Err(e) => {
             error!("Failed to send email: {}", e);
-            HttpResponse::InternalServerError().body(format!("Failed to send_pincode: {}", e))
+            HttpResponse::InternalServerError().json(json!({
+                "error": format!("Failed to send_pincode: {}", e)
+            }))
             // return Err(anyhow::Error::from("Failed to send email"));
         }
     }
@@ -385,18 +378,23 @@ async fn email_login_register(
                 let duration = now.signed_duration_since(user_pincode.created_at);
 
                 if duration.num_minutes() >= 10 {
-                    return HttpResponse::BadRequest().body("Pincode expired");
+                    return HttpResponse::Ok().json(json!({
+                        "error": "Pincode expired"
+                    }));
                 }
                 user_pincode.pincode
             }
             None => {
-                return HttpResponse::BadRequest().body("No pincode found for this email");
+                return HttpResponse::Ok().json(json!({
+                    "error": "No pincode found for this email"
+                }));
             }
         },
         Err(e) => {
             println!("Error getting pincode: {}", e);
-            return HttpResponse::InternalServerError()
-                .body(format!("Failed to get pincode: {}", e));
+            return HttpResponse::InternalServerError().json(json!({
+                "error": format!("Failed to get pincode: {}", e)
+            }));
         }
     };
 
@@ -404,8 +402,8 @@ async fn email_login_register(
     //     return HttpResponse::Unauthorized().body("mismatch Invalid pin code");
     // }
     if params.pin_code != correct_pin_code {
-        return HttpResponse::Unauthorized().json(json!({
-            "message": "mismatch Invalid pin code"
+        return HttpResponse::Ok().json(json!({
+            "error": "mismatch Invalid pin code"
         }));
     }
 
@@ -427,14 +425,15 @@ async fn email_login_register(
         }
         Err(e) => {
             println!("Error creating or updating user: {}", e);
-            return HttpResponse::InternalServerError()
-                .body(format!("Failed to create user: {}", e));
+            return HttpResponse::InternalServerError().json(json!({
+                "error": format!("Failed to create user: {}", e)
+            }));
         }
     }
 }
 
 #[get("/api/v1/user/oauth/init/{provider}")]
-async fn oauth_url(
+async fn oauth_url_init(
     path: web::Path<(String,)>,
     web::Query(params): web::Query<HashMap<String, String>>,
 ) -> impl Responder {
@@ -460,7 +459,9 @@ async fn oauth_url(
                 ))
                 .url();
 
-            return HttpResponse::Ok().body(auth_url.to_string());
+            return HttpResponse::Ok().json(json!({
+                "auth_url": auth_url.to_string()
+            }));
         }
         "github" => {
             println!("match github......");
@@ -478,43 +479,47 @@ async fn oauth_url(
                 "redirect_url": auth_url.to_string()
             }));
         }
-        _ => return HttpResponse::BadRequest().body("Unsupported provider"),
+        _ => {
+            return HttpResponse::Ok().json(json!({
+                "error": "Unsupported provider"
+            }))
+        }
     };
 
     // return HttpResponse::Ok().body("Unsupported error".to_string());
 }
 
-#[get("/api/v1/user/auth_google_url")]
-async fn get_auth_url() -> impl Responder {
-    let client = create_google_oauth_client();
-    let (auth_url, _csrf_token) = client
-        .authorize_url(CsrfToken::new_random)
-        .add_scope(Scope::new(
-            "https://www.googleapis.com/auth/userinfo.email".to_string(),
-        ))
-        .add_scope(Scope::new(
-            "https://www.googleapis.com/auth/userinfo.profile".to_string(),
-        ))
-        .url();
+// #[get("/api/v1/user/auth_google_url")]
+// async fn get_auth_url() -> impl Responder {
+//     let client = create_google_oauth_client();
+//     let (auth_url, _csrf_token) = client
+//         .authorize_url(CsrfToken::new_random)
+//         .add_scope(Scope::new(
+//             "https://www.googleapis.com/auth/userinfo.email".to_string(),
+//         ))
+//         .add_scope(Scope::new(
+//             "https://www.googleapis.com/auth/userinfo.profile".to_string(),
+//         ))
+//         .url();
 
-    HttpResponse::Ok().body(auth_url.to_string())
-}
+//     HttpResponse::Ok().body(auth_url.to_string())
+// }
 
-#[get("/api/v1/user/github_auth_url")]
-async fn get_github_auth_url() -> impl Responder {
-    let client = create_github_oauth_client();
-    let (auth_url, _csrf_token) = client
-        .authorize_url(CsrfToken::new_random)
-        .add_scope(Scope::new("user:email".to_string()))
-        .add_scope(Scope::new("read:user".to_string()))
-        .url();
+// #[get("/api/v1/user/github_auth_url")]
+// async fn get_github_auth_url() -> impl Responder {
+//     let client = create_github_oauth_client();
+//     let (auth_url, _csrf_token) = client
+//         .authorize_url(CsrfToken::new_random)
+//         .add_scope(Scope::new("user:email".to_string()))
+//         .add_scope(Scope::new("read:user".to_string()))
+//         .url();
 
-    println!("Open this URL in your browser:\n{}", auth_url);
+//     println!("Open this URL in your browser:\n{}", auth_url);
 
-    HttpResponse::Ok().json(json!({
-        "redirect_url": auth_url.to_string()
-    }))
-}
+//     HttpResponse::Ok().json(json!({
+//         "redirect_url": auth_url.to_string()
+//     }))
+// }
 
 #[get("/api/v1/user/userinfo")]
 async fn get_user() -> impl Responder {
@@ -558,14 +563,22 @@ async fn get_user_by_token(
         Some(header) => match header.to_str() {
             Ok(str) => str,
             Err(_) => {
-                return HttpResponse::Unauthorized().body("Invalid authorization header format")
+                return HttpResponse::Unauthorized().json(json!({
+                    "error": "Invalid authorization header format"
+                }))
             }
         },
-        None => return HttpResponse::Unauthorized().body("Missing authorization header"),
+        None => {
+            return HttpResponse::Unauthorized().json(json!({
+                "error": "Missing authorization header"
+            }))
+        }
     };
 
     if !auth_header.starts_with("Bearer ") {
-        return HttpResponse::Unauthorized().body("Invalid token format");
+        return HttpResponse::Unauthorized().json(json!({
+            "error": "Invalid token format"
+        }));
     }
 
     let token_result: Result<&str, &str> = Ok(auth_header.split(" ").nth(1).unwrap_or(""));
@@ -576,8 +589,9 @@ async fn get_user_by_token(
             let user = match db.get_user_by_token(auth_header).await {
                 Ok(user) => user,
                 Err(_) => {
-                    return HttpResponse::NotFound()
-                        .json("User not found for given token or token is invalid")
+                    return HttpResponse::NotFound().json(json!({
+                        "error": "User not found for given token or token is invalid"
+                    }))
                 }
             };
 
@@ -585,7 +599,9 @@ async fn get_user_by_token(
         }
         Err(_) => {
             // If token extraction or validation fails, return Unauthorized
-            return HttpResponse::Unauthorized().body("Invalid or missing token");
+            return HttpResponse::Unauthorized().json(json!({
+                "error": "Invalid or missing token"
+            }));
         }
     }
 }
@@ -719,11 +735,11 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(cors)
             .wrap(Logger::default())
-            .service(get_auth_url)
-            .service(get_github_auth_url)
+            // .service(get_auth_url)
+            // .service(get_github_auth_url)
             .service(get_user)
             .service(send_email)
-            .service(oauth_url)
+            .service(oauth_url_init)
             .service(oauth2callback)
             .service(email_login_register)
             .service(get_user_by_token)

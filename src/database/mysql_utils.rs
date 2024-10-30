@@ -372,6 +372,21 @@ impl DatabaseManager {
 
         Ok(result)
     }
+
+    pub async fn invalidate_token(&self, user_id: i32) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE USER_ACCOUNT
+            SET token = NULL
+            WHERE user_id = ?
+            "#,
+        )
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
 }
 
 // async fn index() -> impl Responder {
