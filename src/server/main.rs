@@ -7,6 +7,8 @@ use actix_web::{
     Responder,
 };
 
+use reqwest::Error as ReqwestError;
+
 use oauth2::TokenResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -17,11 +19,14 @@ use serde_json::json;
 use std::env;
 // email part
 
-use reqwest;
+// use reqwest::{self, StatusCode};
 use std::collections::HashMap;
 
 use oauth2::{
-    basic::BasicClient, AuthUrl, ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope, TokenUrl,
+    basic::{BasicClient, BasicErrorResponseType},
+    AuthUrl, ClientId, ClientSecret, CsrfToken, HttpRequest as OAuth2HttpRequest,
+    HttpResponse as OAuth2HttpResponse, RedirectUrl, RequestTokenError, Scope,
+    StandardErrorResponse, TokenUrl,
 };
 
 use UserAgent::communication::aws_utils::EmailManager;
@@ -30,6 +35,8 @@ use UserAgent::database::mysql_utils::{self};
 //mq
 use UserAgent::mq::kafka;
 
+use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode as httpStatusCode};
+use reqwest;
 use std::time::Duration;
 
 // const MarketingServerUrl: &str = "topai-marketing-server.demo-ray.svc.cluster.local/api/v1/voucher/exchange:80";
@@ -254,122 +261,149 @@ async fn oauth2callback(
     println!("oauth2callback");
     println!("{:?}", params.code);
 
-    // 检查 code 是否包含非法字符
-    if !params
-        .code
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        println!("Code contains invalid characters");
-        return Err(ErrorInternalServerError("Invalid code format"));
-    }
-
     let voucher_code = params.state;
     println!("voucher_code: {}", voucher_code);
 
     let provider = path.into_inner().0;
     match provider.as_str() {
         "google" => {
-            // let proxy_endpoint = env::var("PROXY_HOST").unwrap_or("".to_string());
+            let proxy_endpoint = env::var("PROXY_HOST").unwrap_or("".to_string());
 
-            // // Assume `client` is your reqwest client configured with the proxy
-            // let client = reqwest::Client::builder()
-            //     .proxy(reqwest::Proxy::http(proxy_endpoint.as_str()).unwrap()) // 设置HTTP代理
-            //     .proxy(reqwest::Proxy::https(proxy_endpoint.as_str()).unwrap()) // 设置HTTPS代理
-            //     .timeout(Duration::from_secs(30))
-            //     .danger_accept_invalid_certs(true)
-            //     .build()
-            //     .map_err(|e| ErrorInternalServerError(format!("Failed to build client: {}", e)))?;
+            println!("proxy_endpoint: {:?}, start create client", proxy_endpoint);
+            // Assume `client` is your reqwest client configured with the proxy
+            let client = reqwest::Client::builder()
+                .proxy(reqwest::Proxy::http(proxy_endpoint.as_str()).unwrap()) // Set HTTP proxy
+                .proxy(reqwest::Proxy::https(proxy_endpoint.as_str()).unwrap()) // Set HTTPS proxy
+                .timeout(Duration::from_secs(30))
+                .danger_accept_invalid_certs(true)
+                .build()
+                .map_err(|e| ErrorInternalServerError(format!("Failed to build client: {}", e)))?;
 
-            // let token =
-            //     match google_client
-            //         .0
-            //         .exchange_code(oauth2::AuthorizationCode::new(params.code))
-            //         .request_async(|request: oauth2::HttpRequest| async {
-            //             // Get the parts of the request
-            //             let (method, url, headers, body) = request.into_parts();
+            println!("start exchange code");
+            let token = match google_client
+                .0
+                .exchange_code(oauth2::AuthorizationCode::new(params.code))
+                .request_async(move |request: oauth2::HttpRequest| {
+                    println!("start....");
+                    let client = client.clone(); // Clone client to move into async block
 
-            //             // Build and execute reqwest request with our custom client
-            //             let mut req_builder = client.request(method, url);
+                    async move {
+                        // Use 'client' inside the async block
+                        let method = request.method;
+                        let url = request.url;
+                        let headers = request.headers;
+                        let body = request.body;
 
-            //             // Add headers
-            //             for (k, v) in headers.iter() {
-            //                 req_builder = req_builder.header(k.as_str(), v.as_bytes());
-            //             }
+                        println!("body is {:?}", body);
 
-            //             // Set the body if it exists
-            //             if let Some(body) = body {
-            //                 req_builder = req_builder.body(body);
-            //             }
+                        // Build and execute reqwest request with our custom client
+                        let mut req_builder = client.request(
+                            reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap(),
+                            url,
+                        );
 
-            //             // Send the request
-            //             let resp = req_builder.send().await.map_err(|e| {
-            //                 oauth2::RequestTokenError::Request(e.to_string().into())
-            //             })?;
+                        println!("start proxy request");
 
-            //             // Extract response components
-            //             let status = resp.status();
-            //             let headers = resp.headers().clone();
-            //             let bytes = resp.bytes().await.map_err(|e| {
-            //                 oauth2::RequestTokenError::Request(e.to_string().into())
-            //             })?;
+                        // Add headers
+                        for (k, v) in headers.iter() {
+                            req_builder = req_builder.header(k.as_str(), v.as_bytes());
+                        }
 
-            //             // Construct the oauth2::HttpResponse
-            //             Ok(oauth2::HttpResponse {
-            //                 status_code: status,
-            //                 headers,
-            //                 body: bytes.to_vec(),
-            //             })
-            //         })
-            //         .await
-            //     {
-            //         Ok(token) => token,
-            //         Err(e) => {
-            //             println!("Failed to exchange code: {:?}", e);
-            //             return Ok(actix_web::HttpResponse::InternalServerError().json(json!({
-            //                 "error": format!("Failed to exchange code: {:?}", e)
-            //             })));
-            //         }
-            //     };
+                        req_builder = req_builder.body(body);
 
-            // let token = match google_client
-            //     .0
-            //     .exchange_code(oauth2::AuthorizationCode::new(params.code))
-            //     .request_async(|r| async {
-            //         // Get the parts of the request
-            //         let (method, url, headers, body) = r.into_parts();
+                        // Send the request
+                        let resp = req_builder
+                            .send()
+                            .await
+                            .map_err(|e| {
+                                oauth2::RequestTokenError::<
+                                    reqwest::Error,
+                                    oauth2::StandardErrorResponse<
+                                        oauth2::basic::BasicErrorResponseType,
+                                    >,
+                                >::Request(e)
+                            })
+                            .unwrap();
 
-            //         // Build and execute reqwest request with our custom client
-            //         let mut req_builder = client.request(method, url);
-            //         for (k, v) in headers.iter() {
-            //             req_builder = req_builder.header(k, v);
-            //         }
-            //         if let Some(body) = body {
-            //             req_builder = req_builder.body(body);
-            //         }
+                        // Extract response components
 
-            //         let resp = req_builder.send().await?;
-            //         let status = resp.status();
-            //         let headers = resp.headers().clone();
-            //         let bytes = resp.bytes().await?;
+                        let status = httpStatusCode::from_u16(resp.status().as_u16()).unwrap();
+                        let headers = resp
+                            .headers()
+                            .iter()
+                            .map(|(k, v)| {
+                                (
+                                    actix_web::http::header::HeaderName::from_bytes(
+                                        <http::HeaderName as AsRef<[u8]>>::as_ref(k),
+                                    )
+                                    .unwrap(),
+                                    actix_web::http::header::HeaderValue::from_bytes(v.as_bytes())
+                                        .unwrap(),
+                                )
+                            })
+                            .collect::<actix_web::http::header::HeaderMap>();
+                        let bytes = resp
+                            .bytes()
+                            .await
+                            .map_err(|e| {
+                                oauth2::RequestTokenError::<
+                                    reqwest::Error,
+                                    oauth2::StandardErrorResponse<
+                                        oauth2::basic::BasicErrorResponseType,
+                                    >,
+                                >::Request(e)
+                            })
+                            .unwrap();
 
-            //         // Ok(Responsense::new(status, headers, bytes))
-            //         Ok(HttpResponse::Ok().body("".to_string()))
-            //     })
-            //     .await
-            // {
-            //     Ok(token) => token,
-            //     Err(e) => {
-            //         println!("Failed to exchange code: {:?}", e);
-            //         return Ok(HttpResponse::InternalServerError().json(json!({
-            //             "error": format!("Failed to exchange code: {:?}", e)
-            //         })));
-            //     }
-            // };
+                        Ok::<oauth2::HttpResponse, Error>(OAuth2HttpResponse {
+                            status_code: actix_web::http::StatusCode::from_u16(status.as_u16())
+                                .unwrap(),
+                            headers: headers.into(),
+                            body: bytes.into(), //Vec::new(),
+                        })
+                        // Ok().body("".to_string())
+                    }
+                })
+                .await
+            {
+                Ok(token) => token,
+                Err(e) => {
+                    println!("Failed to exchange code: {:?}", e);
+                    return Ok(actix_web::HttpResponse::InternalServerError().json(json!({
+                        "error": format!("Failed to exchange code: {:?}", e)
+                    })));
+                }
+            };
 
-            return Ok(HttpResponse::Ok().json(json!({
-                "topai_token": ""
-            })));
+            //could get more info from token
+            let user_info_str = get_google_emails(token.access_token().secret().as_str())
+                .await
+                .unwrap();
+
+            println!("user_info: {:?}", user_info_str);
+
+            let user_info: Value = serde_json::from_str(&user_info_str).unwrap();
+            let primary_email = user_info["email"].as_str().unwrap().to_string();
+
+            match generate_tokens(primary_email.to_string(), voucher_code, db, kafka_handler).await
+            {
+                Ok(topai_token) => {
+                    println!("start create update .......");
+                    return Ok(HttpResponse::Ok().json(json!({
+                        "topai_token": topai_token
+                    })));
+                }
+                Err(e) => {
+                    println!("Error creating or updating user: {}", e);
+                    return Ok(HttpResponse::InternalServerError().json(json!({
+                        "error": e.to_string()
+                    })));
+                }
+            }
+
+            // return Ok(HttpResponse::Ok().json(json!({
+            //     "topai_token": token.access_token().secret(),
+            // })));
         }
         "github" => {
             println!("github start exchange codes {:?}", params.code);
@@ -387,18 +421,18 @@ async fn oauth2callback(
                     })));
                 }
             };
-            // }
-            // .map_err(|_| ErrorInternalServerError("Failed to exchange code"))?;
 
             let user_info = get_github_emails(token.access_token().secret().as_str())
                 .await
                 .unwrap();
 
+            //todo 如果需要获取更多信息，可以在这里获取user_info.1
             let primary_email = user_info
+                .0
                 .iter()
                 .find(|e| e.primary)
                 .map(|e| &e.email)
-                .unwrap_or(&user_info[0].email);
+                .unwrap_or(&user_info.0[0].email);
             println!("Got github user primary email: {}", primary_email);
 
             // db.create_update_user(primary_email.as_str()).await;
@@ -587,7 +621,7 @@ async fn oauth_url_init(
                 .url();
 
             return HttpResponse::Ok().json(json!({
-                "auth_url": auth_url.to_string()
+                "redirect_url": auth_url.to_string()
             }));
 
             // return HttpResponse::Ok().body("hello");
@@ -599,7 +633,8 @@ async fn oauth_url_init(
             let (auth_url, _csrf_token) = github_client
                 .0
                 .authorize_url(move || CsrfToken::new(csrf_state.clone()))
-                .add_scope(Scope::new("user:email".to_string())) //.set_pkce_challenge(pkce_challenge)
+                .add_scope(Scope::new("user:email".to_string()))
+                .add_scope(Scope::new("read:user".to_string())) //.set_pkce_challenge(pkce_challenge)
                 .url();
 
             println!("Open this URL in your browser:\n{}", auth_url);
@@ -768,7 +803,7 @@ async fn get_user_by_token(
     }
 }
 
-async fn get_github_emails(access_token: &str) -> Result<Vec<EmailResponse>, Error> {
+async fn get_github_emails(access_token: &str) -> Result<(Vec<EmailResponse>, Value), Error> {
     // let client = reqwest::Client::new();
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30)) // 添加超时
@@ -787,10 +822,25 @@ async fn get_github_emails(access_token: &str) -> Result<Vec<EmailResponse>, Err
         .await
         .map_err(|e| ErrorInternalServerError(format!("Failed to parse response text: {}", e)))?;
 
-    let response: Vec<EmailResponse> = serde_json::from_str(&response_text)
+    let response_text_profile = client
+        .get("https://api.github.com/user")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("User-Agent", "YOUR_APP_NAME")
+        .send()
+        .await
+        .map_err(|e| ErrorInternalServerError(format!("Failed to fetch emails: {}", e)))?
+        .text()
+        .await
+        .map_err(|e| ErrorInternalServerError(format!("Failed to parse response text: {}", e)))?;
+
+    println!("profile detail: {}", response_text_profile);
+    let response_profile: Value = serde_json::from_str(&response_text_profile).unwrap();
+    println!("response_profile detail: {}", response_profile);
+
+    let response_email: Vec<EmailResponse> = serde_json::from_str(&response_text)
         .map_err(|e| ErrorInternalServerError(format!("Failed to parse email response: {}", e)))?;
 
-    Ok(response)
+    Ok((response_email, response_profile))
 }
 
 async fn get_google_emails(access_token: &str) -> Result<String, Error> {
@@ -822,10 +872,8 @@ async fn get_google_emails(access_token: &str) -> Result<String, Error> {
         ErrorInternalServerError(format!("Failed to parse user info response: {}", e))
     })?;
 
-    match user_info.get("email") {
-        Some(email) => Ok(email.as_str().unwrap_or("").to_string()),
-        None => Err(ErrorInternalServerError("Email not found in response")),
-    }
+    println!("user_info: {:?}", user_info);
+    Ok(response_text)
 }
 
 #[post("/api/v1/user/logout")]
@@ -898,22 +946,6 @@ async fn main() -> std::io::Result<()> {
 
     let github_client = web::Data::new(GithubClient(create_github_oauth_client()));
     let google_client = web::Data::new(GoogleClient(create_google_oauth_client()));
-
-    //github auth client
-    // let github_client = match create_github_oauth_client() {
-    //     client => {
-    //         println!("Successfully created GitHub OAuth client");
-    //         web::Data::new(client)
-    //     }
-    // };
-
-    //google auth client
-    // let google_client = match create_google_oauth_client() {
-    //     client => {
-    //         println!("Successfully created Google OAuth client");
-    //         web::Data::new(client)
-    //     }
-    // };
 
     //email manager
     let email_manager = web::Data::new(EmailManager::new().await);
