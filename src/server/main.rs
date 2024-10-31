@@ -876,21 +876,21 @@ async fn main() -> std::io::Result<()> {
     let _ = env_logger::try_init();
 
     // 初始化数据库
-    // let mysql_connect = dotenv::var("MYSQL_URL").unwrap();
-    // let _db_manager = mysql_utils::new(mysql_connect.as_str()).await.unwrap();
+    let mysql_connect = dotenv::var("MYSQL_URL").unwrap();
+    let _db_manager = mysql_utils::new(mysql_connect.as_str()).await.unwrap();
 
-    // let db_manager = web::Data::new(_db_manager);
-    // db_manager.create_table().await.unwrap();
+    let db_manager = web::Data::new(_db_manager);
+    db_manager.create_table().await.unwrap();
 
-    // // kafka obj
-    // let kafka_obj = match kafka::KafkaHandler::new(
-    //     env::var("BROKER").expect("broker must be set").as_str(),
-    //     kafka::KAFKA_TOPIC,
-    // ) {
-    //     Ok(handler) => handler,
-    //     Err(e) => panic!("Failed to create Kafka handler: {}", e),
-    // };
-    // let kafka_handler = web::Data::new(kafka_obj);
+    // kafka obj
+    let kafka_obj = match kafka::KafkaHandler::new(
+        env::var("BROKER").expect("broker must be set").as_str(),
+        kafka::KAFKA_TOPIC,
+    ) {
+        Ok(handler) => handler,
+        Err(e) => panic!("Failed to create Kafka handler: {}", e),
+    };
+    let kafka_handler = web::Data::new(kafka_obj);
     // Further initialization or setup if needed
     // For example, you might want to call some setup function on db_manager
     info!("starting web server...");
@@ -955,8 +955,8 @@ async fn main() -> std::io::Result<()> {
             .service(email_login_register)
             .service(get_user_by_token)
             .service(get_user_by_email)
-            // .app_data(db_manager.clone())
-            // .app_data(kafka_handler.clone())
+            .app_data(db_manager.clone())
+            .app_data(kafka_handler.clone())
             .app_data(github_client.clone())
             .app_data(google_client.clone())
             .app_data(email_manager.clone())
