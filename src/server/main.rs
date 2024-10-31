@@ -269,7 +269,108 @@ async fn oauth2callback(
 
     let provider = path.into_inner().0;
     match provider.as_str() {
-        "google" => Ok(HttpResponse::Ok().body("test")),
+        "google" => {
+            // let proxy_endpoint = env::var("PROXY_HOST").unwrap_or("".to_string());
+
+            // // Assume `client` is your reqwest client configured with the proxy
+            // let client = reqwest::Client::builder()
+            //     .proxy(reqwest::Proxy::http(proxy_endpoint.as_str()).unwrap()) // 设置HTTP代理
+            //     .proxy(reqwest::Proxy::https(proxy_endpoint.as_str()).unwrap()) // 设置HTTPS代理
+            //     .timeout(Duration::from_secs(30))
+            //     .danger_accept_invalid_certs(true)
+            //     .build()
+            //     .map_err(|e| ErrorInternalServerError(format!("Failed to build client: {}", e)))?;
+
+            // let token =
+            //     match google_client
+            //         .0
+            //         .exchange_code(oauth2::AuthorizationCode::new(params.code))
+            //         .request_async(|request: oauth2::HttpRequest| async {
+            //             // Get the parts of the request
+            //             let (method, url, headers, body) = request.into_parts();
+
+            //             // Build and execute reqwest request with our custom client
+            //             let mut req_builder = client.request(method, url);
+
+            //             // Add headers
+            //             for (k, v) in headers.iter() {
+            //                 req_builder = req_builder.header(k.as_str(), v.as_bytes());
+            //             }
+
+            //             // Set the body if it exists
+            //             if let Some(body) = body {
+            //                 req_builder = req_builder.body(body);
+            //             }
+
+            //             // Send the request
+            //             let resp = req_builder.send().await.map_err(|e| {
+            //                 oauth2::RequestTokenError::Request(e.to_string().into())
+            //             })?;
+
+            //             // Extract response components
+            //             let status = resp.status();
+            //             let headers = resp.headers().clone();
+            //             let bytes = resp.bytes().await.map_err(|e| {
+            //                 oauth2::RequestTokenError::Request(e.to_string().into())
+            //             })?;
+
+            //             // Construct the oauth2::HttpResponse
+            //             Ok(oauth2::HttpResponse {
+            //                 status_code: status,
+            //                 headers,
+            //                 body: bytes.to_vec(),
+            //             })
+            //         })
+            //         .await
+            //     {
+            //         Ok(token) => token,
+            //         Err(e) => {
+            //             println!("Failed to exchange code: {:?}", e);
+            //             return Ok(actix_web::HttpResponse::InternalServerError().json(json!({
+            //                 "error": format!("Failed to exchange code: {:?}", e)
+            //             })));
+            //         }
+            //     };
+
+            // let token = match google_client
+            //     .0
+            //     .exchange_code(oauth2::AuthorizationCode::new(params.code))
+            //     .request_async(|r| async {
+            //         // Get the parts of the request
+            //         let (method, url, headers, body) = r.into_parts();
+
+            //         // Build and execute reqwest request with our custom client
+            //         let mut req_builder = client.request(method, url);
+            //         for (k, v) in headers.iter() {
+            //             req_builder = req_builder.header(k, v);
+            //         }
+            //         if let Some(body) = body {
+            //             req_builder = req_builder.body(body);
+            //         }
+
+            //         let resp = req_builder.send().await?;
+            //         let status = resp.status();
+            //         let headers = resp.headers().clone();
+            //         let bytes = resp.bytes().await?;
+
+            //         // Ok(Responsense::new(status, headers, bytes))
+            //         Ok(HttpResponse::Ok().body("".to_string()))
+            //     })
+            //     .await
+            // {
+            //     Ok(token) => token,
+            //     Err(e) => {
+            //         println!("Failed to exchange code: {:?}", e);
+            //         return Ok(HttpResponse::InternalServerError().json(json!({
+            //             "error": format!("Failed to exchange code: {:?}", e)
+            //         })));
+            //     }
+            // };
+
+            return Ok(HttpResponse::Ok().json(json!({
+                "topai_token": ""
+            })));
+        }
         "github" => {
             println!("github start exchange codes {:?}", params.code);
             let token = match github_client
@@ -551,14 +652,42 @@ async fn oauth_url_init(
 // }
 
 #[get("/api/v1/user/userinfo")]
-async fn get_user() -> impl Responder {
+async fn get_user(db: web::Data<mysql_utils::DatabaseManager>, req: HttpRequest) -> impl Responder {
     // 这里应该实现从session中获取用户信息的逻辑
     // 为了演示，我们返回一个模拟的用户
+    // let user = UserInfo {
+    //     name: "John Doe".to_string(),
+    //     email: "johndoe@example.com".to_string(),
+    // };
+    //
     let user = UserInfo {
-        name: "John Doe".to_string(),
-        email: "johndoe@example.com".to_string(),
+        name: "Test User".to_string(),
+        email: "test@example.com".to_string(),
     };
-    HttpResponse::Ok().json(user)
+
+    if let Some(auth_header) = req.headers().get("Authorization") {
+        if let Ok(auth_str) = auth_header.to_str() {
+            if auth_str.starts_with("Bearer ") {
+                let token = auth_str.trim_start_matches("Bearer ");
+                match db.get_user_by_token(token).await {
+                    Ok(user_info) => {
+                        return HttpResponse::Ok().json(user_info);
+                    }
+                    Err(_) => {
+                        return HttpResponse::Unauthorized().json(json!({
+                            "error": "Invalid token"
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    return HttpResponse::Unauthorized().json(json!({
+        "error": "Missing Authorization header"
+    }));
+
+    // HttpResponse::Ok().json(user)
 }
 
 #[get("/api/v1/user/getuserbyemail")]
@@ -665,7 +794,20 @@ async fn get_github_emails(access_token: &str) -> Result<Vec<EmailResponse>, Err
 }
 
 async fn get_google_emails(access_token: &str) -> Result<String, Error> {
-    let client = reqwest::Client::new();
+    let proxy_endpoint = env::var("PROXY_HOST").unwrap_or("".to_string());
+
+    if proxy_endpoint.is_empty() {
+        return Err(ErrorInternalServerError("Proxy host not set".to_string()));
+    }
+
+    let client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::http(proxy_endpoint.as_str()).unwrap()) // 设置HTTP代理
+        .proxy(reqwest::Proxy::https(proxy_endpoint.as_str()).unwrap()) // 设置HTTPS代理
+        .timeout(Duration::from_secs(30))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| ErrorInternalServerError(format!("Failed to build client: {}", e)))?;
+
     let response_text = client
         .get("https://www.googleapis.com/oauth2/v2/userinfo")
         .header("Authorization", format!("Bearer {}", access_token))
@@ -734,21 +876,21 @@ async fn main() -> std::io::Result<()> {
     let _ = env_logger::try_init();
 
     // 初始化数据库
-    let mysql_connect = dotenv::var("MYSQL_URL").unwrap();
-    let _db_manager = mysql_utils::new(mysql_connect.as_str()).await.unwrap();
+    // let mysql_connect = dotenv::var("MYSQL_URL").unwrap();
+    // let _db_manager = mysql_utils::new(mysql_connect.as_str()).await.unwrap();
 
-    let db_manager = web::Data::new(_db_manager);
-    db_manager.create_table().await.unwrap();
+    // let db_manager = web::Data::new(_db_manager);
+    // db_manager.create_table().await.unwrap();
 
-    // kafka obj
-    let kafka_obj = match kafka::KafkaHandler::new(
-        env::var("BROKER").expect("broker must be set").as_str(),
-        kafka::KAFKA_TOPIC,
-    ) {
-        Ok(handler) => handler,
-        Err(e) => panic!("Failed to create Kafka handler: {}", e),
-    };
-    let kafka_handler = web::Data::new(kafka_obj);
+    // // kafka obj
+    // let kafka_obj = match kafka::KafkaHandler::new(
+    //     env::var("BROKER").expect("broker must be set").as_str(),
+    //     kafka::KAFKA_TOPIC,
+    // ) {
+    //     Ok(handler) => handler,
+    //     Err(e) => panic!("Failed to create Kafka handler: {}", e),
+    // };
+    // let kafka_handler = web::Data::new(kafka_obj);
     // Further initialization or setup if needed
     // For example, you might want to call some setup function on db_manager
     info!("starting web server...");
@@ -813,8 +955,8 @@ async fn main() -> std::io::Result<()> {
             .service(email_login_register)
             .service(get_user_by_token)
             .service(get_user_by_email)
-            .app_data(db_manager.clone())
-            .app_data(kafka_handler.clone())
+            // .app_data(db_manager.clone())
+            // .app_data(kafka_handler.clone())
             .app_data(github_client.clone())
             .app_data(google_client.clone())
             .app_data(email_manager.clone())
