@@ -71,6 +71,13 @@ pub async fn generate_tokens(
                     eprintln!("Failed to exchange voucher code: {}", e);
                 }
             }
+
+            let current_time = chrono::Utc::now().date_naive();
+            let last_login = user_account
+                .last_login_time
+                .date_naive()
+                .unwrap_or(current_time);
+
             if new_user {
                 //sendmsg to kafka
 
@@ -78,6 +85,20 @@ pub async fn generate_tokens(
                 map.insert("user_id".to_string(), json!(user_account.user_id));
                 map.insert("type".to_string(), json!("user"));
                 match kafka_handler.send_message("user", map).await {
+                    Ok(_) => {
+                        println!("send kafka success");
+                    }
+                    Err(e) => {
+                        println!("send kafka failed: {}", e);
+                    }
+                }
+            }
+
+            if current_time != last_login {
+                let mut map: HashMap<String, Value> = HashMap::new();
+                map.insert("user_id".to_string(), json!(user_account.user_id));
+                map.insert("type".to_string(), json!("daily_online"));
+                match kafka_handler.send_message("credits", map).await {
                     Ok(_) => {
                         println!("send kafka success");
                     }
