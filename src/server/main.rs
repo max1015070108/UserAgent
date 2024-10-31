@@ -75,7 +75,7 @@ pub async fn generate_tokens(
             let current_time = chrono::Utc::now().date_naive();
             let last_login = user_account
                 .last_login_time
-                .date_naive()
+                .map(|dt| dt.date_naive())
                 .unwrap_or(current_time);
 
             if new_user {
