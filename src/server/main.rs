@@ -60,7 +60,7 @@ pub async fn generate_tokens(
     kafka_handler: web::Data<kafka::KafkaHandler>,
 ) -> Result<String, sqlx::Error> {
     match db.create_update_user(email.as_str()).await {
-        Ok((user_account, new_user)) => {
+        Ok((user_account, new_user, last_login_old)) => {
             println!("start create_update_user {:?}", new_user);
 
             //sync to vouch
@@ -78,6 +78,8 @@ pub async fn generate_tokens(
                 .map(|dt| dt.date_naive())
                 .unwrap_or(current_time);
 
+            let last_login_old_date = last_login_old.date_naive();
+
             if new_user {
                 //sendmsg to kafka
 
@@ -94,13 +96,23 @@ pub async fn generate_tokens(
                 }
             }
 
-            if current_time != last_login {
+            println!(
+                "last_login_old_date: {}, last_login: {}, registration_time: {}",
+                last_login_old_date.to_string(),
+                last_login.to_string(),
+                user_account.registration_time.date_naive().to_string(),
+            );
+
+            //last_login_old
+            if last_login == user_account.registration_time.date_naive()
+                || last_login > last_login_old_date
+            {
                 let mut map: HashMap<String, Value> = HashMap::new();
                 map.insert("user_id".to_string(), json!(user_account.user_id));
                 map.insert("type".to_string(), json!("daily_online"));
                 match kafka_handler.send_message("credits", map).await {
                     Ok(_) => {
-                        println!("send kafka success");
+                        println!("send kafka credits daily_online success");
                     }
                     Err(e) => {
                         println!("send kafka failed: {}", e);

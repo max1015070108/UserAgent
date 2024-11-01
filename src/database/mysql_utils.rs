@@ -127,7 +127,10 @@ impl DatabaseManager {
     }
 
     // UserAccount CRUD operations
-    pub async fn create_update_user(&self, email: &str) -> Result<(UserAccount, bool)> {
+    pub async fn create_update_user(
+        &self,
+        email: &str,
+    ) -> Result<(UserAccount, bool, DateTime<Utc>)> {
         let now = Utc::now();
 
         // Generate an API token using a common method in Rust
@@ -157,6 +160,22 @@ impl DatabaseManager {
                 .map(char::from)
                 .collect()
         };
+
+        let mut old_login_time = DateTime::<Utc>::from_naive_utc_and_offset(
+            chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap(),
+            Utc,
+        );
+        // First check if user exists and get old login time
+
+        old_login_time =
+            match sqlx::query_as::<_, UserAccount>("SELECT * FROM USER_ACCOUNT WHERE email = ?")
+                .bind(email)
+                .fetch_optional(&self.pool)
+                .await?
+            {
+                Some(user) => user.last_login_time.unwrap(),
+                None => old_login_time,
+            };
 
         // First perform the insert/update
         let result = sqlx::query(
@@ -189,7 +208,7 @@ impl DatabaseManager {
             .fetch_one(&self.pool)
             .await?;
 
-        Ok((user, was_insert))
+        Ok((user, was_insert, old_login_time))
     }
 
     pub async fn get_user_by_id(&self, user_id: i32) -> Result<Option<UserAccount>> {
