@@ -1,1 +1,10 @@
-ste
+遇到cmake的问题
+https://cmake.org/download/
+直接下载，制定cmake v4版本一下，解决
+
+export PATH="/Applications/CMake.app/Contents/bin:$PATH"
+
+[dependencies]
+rdkafka = { version = "0.31", features = ["cmake-build"] }
+
+解决kafaka的版本兼容性问题

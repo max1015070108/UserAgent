@@ -1,0 +1,3 @@
+[env]
+CMAKE = "/Applications/CMake.app/Contents/bin/cmake"
+PATH = "/Applications/CMake.app/Contents/bin:/usr/bin:/bin:/usr/sbin:/sbin"
