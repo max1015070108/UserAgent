@@ -33,6 +33,19 @@ reqwest = "0.12.8" #{ version = "0.12.8", features = ["rustls-tls"] }
 http = "1.1.0"
 
 
+futures = "0.3"
+http-client = "6.5.3"
+schemars = { version = "0.8", optional = true }
+rig-core = "0.12.0"
+tracing-subscriber = "0.3.19"
+tracing = "0.1.41"
+longport = "2.1.12"
+# async-std = "1.13.1"
+async-std = { version = "1.13.1", features = ["attributes"] }
+flate2 = "1.1.1"
+fluvio = "0.27.0"
+
+
 # [lib]
 # path = "src/lib.rs"
 
