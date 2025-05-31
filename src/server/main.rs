@@ -687,38 +687,6 @@ async fn oauth_url_init(
     // return HttpResponse::Ok().body("Unsupported error".to_string());
 }
 
-// #[get("/api/v1/user/auth_google_url")]
-// async fn get_auth_url() -> impl Responder {
-//     let client = create_google_oauth_client();
-//     let (auth_url, _csrf_token) = client
-//         .authorize_url(CsrfToken::new_random)
-//         .add_scope(Scope::new(
-//             "https://www.googleapis.com/auth/userinfo.email".to_string(),
-//         ))
-//         .add_scope(Scope::new(
-//             "https://www.googleapis.com/auth/userinfo.profile".to_string(),
-//         ))
-//         .url();
-
-//     HttpResponse::Ok().body(auth_url.to_string())
-// }
-
-// #[get("/api/v1/user/github_auth_url")]
-// async fn get_github_auth_url() -> impl Responder {
-//     let client = create_github_oauth_client();
-//     let (auth_url, _csrf_token) = client
-//         .authorize_url(CsrfToken::new_random)
-//         .add_scope(Scope::new("user:email".to_string()))
-//         .add_scope(Scope::new("read:user".to_string()))
-//         .url();
-
-//     println!("Open this URL in your browser:\n{}", auth_url);
-
-//     HttpResponse::Ok().json(json!({
-//         "redirect_url": auth_url.to_string()
-//     }))
-// }
-
 #[get("/api/v1/user/userinfo")]
 async fn get_user(db: web::Data<mysql_utils::DatabaseManager>, req: HttpRequest) -> impl Responder {
     // 这里应该实现从session中获取用户信息的逻辑
