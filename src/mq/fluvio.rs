@@ -1,22 +1,57 @@
+// use async_std::stream::StreamExt;
+use futures_util::StreamExt;
+
+use dotenv::dotenv;
+use fluvio::{
+    metadata::topic::TopicSpec, Compression, ConsumerConfig, Fluvio, FluvioClusterConfig, Offset,
+    RecordKey, TopicProducer, TopicProducerConfigBuilder,
+};
+use std::env;
+
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
-use async_std::stream::StreamExt;
-use fluvio::{
-    metadata::topic::TopicSpec, Compression, Fluvio, Offset, RecordKey, TopicProducerConfigBuilder,
-};
+use fluvio::spu::SpuPool;
 
-pub struct FluvioManager {
+pub struct FluvioManager<S>
+where
+    S: SpuPool + Send + Sync + 'static,
+{
     fluvio: Arc<Fluvio>,
+    producers: Mutex<HashMap<String, Arc<TopicProducer<S>>>>,
 }
 
-impl FluvioManager {
+impl<S> FluvioManager<S>
+where
+    S: SpuPool + Send + Sync + 'static,
+{
     // 1. Connect to Fluvio cluster
     pub async fn connect() -> anyhow::Result<Self> {
-        let fluvio = Fluvio::connect().await?;
+        // let fluvio = Fluvio::connect().await?;
+        // Ok(Self {
+        //     fluvio: Arc::new(fluvio),
+        //     producers: Mutex::new(HashMap::new()),
+        // })
+        // pub async fn connect() -> anyhow::Result<Self> {
+        dotenv().ok(); // 加载.env文件
+
+        // 读取环境变量
+        let endpoint =
+            env::var("FLUVIO_CLUSTER_ENDPOINT").unwrap_or_else(|_| "localhost:9003".to_string());
+
+        // 构造 FluvioClusterConfig
+        let mut config = FluvioClusterConfig::new(endpoint);
+
+        // 你可以根据需要设置更多 config 字段
+
+        let fluvio = Fluvio::connect_with_config(&config).await?;
         Ok(Self {
             fluvio: Arc::new(fluvio),
+            producers: Mutex::new(HashMap::new()),
         })
+        // }
     }
 
     // 2. Produce data with TopicProducerConfig
@@ -48,10 +83,16 @@ impl FluvioManager {
         offset: Offset,
         max_records: usize,
     ) -> anyhow::Result<Vec<(Option<RecordKey>, String)>> {
-        let consumer = self.fluvio.partition_consumer(topic, partition).await?;
-        let mut stream = consumer.stream(offset).await?;
+        // let config = fluvio::ConsumerConfig::builder().build()?;
+        let config = fluvio::consumer::ConsumerConfigExtBuilder::default()
+            .topic(topic.to_string())
+            .partition(partition)
+            .offset_start(offset)
+            .build()?;
+        let mut stream = self.fluvio.consumer_with_config(config).await?;
+
         let mut results = Vec::new();
-        while let Some(Ok(record)) = StreamExt::next(&mut stream).await {
+        while let Some(Ok(record)) = stream.next().await {
             let value = String::from_utf8_lossy(record.value()).into_owned();
             let key = record.key().map(|k| k.to_vec());
             results.push((key, value));

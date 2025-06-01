@@ -1,3 +1,6 @@
+//sqlite
+use sqlx::sqlite::SqlitePool;
+
 use actix_cors::Cors;
 use actix_session::{Session, SessionMiddleware};
 use actix_web::cookie::Key;
@@ -32,6 +35,8 @@ use oauth2::{
 use UserAgent::communication::aws_utils::EmailManager;
 // use DatabaseManager
 use UserAgent::database::mysql_utils::{self};
+
+use UserAgent::database::sqlite_utils::{self};
 //mq
 use UserAgent::mq::kafka;
 
@@ -148,21 +153,6 @@ pub async fn get_or_generate_pincode(
                     Ok(_) => (),
                     Err(e) => return Err(e),
                 }
-
-                // Send email with new pincode
-                // match email_manager.send_email_to(email).await {
-                //     Ok(_) => {
-                //         println!("Email sent successfully");
-                //     }
-                //     Err(e) => {
-                //         error!("Failed to send email: {}", e);
-                //         return Err(sqlx::Error::Protocol(format!(
-                //             "Failed to send email: {}",
-                //             e
-                //         )));
-                //         // return Err(anyhow::Error::from("Failed to send email"));
-                //     }
-                // };
                 Ok(new_pincode)
             }
         }
@@ -924,22 +914,28 @@ struct GithubClient(BasicClient);
 async fn main() -> std::io::Result<()> {
     let _ = env_logger::try_init();
 
-    // 初始化数据库
+    // 初始化mysql数据库
     let mysql_connect = dotenv::var("MYSQL_URL").unwrap();
     let _db_manager = mysql_utils::new(mysql_connect.as_str()).await.unwrap();
-
     let db_manager = web::Data::new(_db_manager);
     db_manager.create_table().await.unwrap();
 
-    // kafka obj
-    let kafka_obj = match kafka::KafkaHandler::new(
-        env::var("BROKER").expect("broker must be set").as_str(),
-        kafka::KAFKA_TOPIC,
-    ) {
-        Ok(handler) => handler,
-        Err(e) => panic!("Failed to create Kafka handler: {}", e),
-    };
-    let kafka_handler = web::Data::new(kafka_obj);
+    //初始化sqlite3
+    let sqlite_connect = dotenv::var("SQLITE_URL")
+        .unwrap_or_else(|_| "sqlite:///Users/harryma/sqlite.db".to_string());
+    let pool = SqlitePool::connect(sqlite_connect.as_str()).await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    sqlite_utils::init_db(&mut *conn).await.unwrap();
+
+    // // kafka obj
+    // let kafka_obj = match kafka::KafkaHandler::new(
+    //     env::var("BROKER").expect("broker must be set").as_str(),
+    //     kafka::KAFKA_TOPIC,
+    // ) {
+    //     Ok(handler) => handler,
+    //     Err(e) => panic!("Failed to create Kafka handler: {}", e),
+    // };
+    // let kafka_handler = web::Data::new(kafka_obj);
     // Further initialization or setup if needed
     // For example, you might want to call some setup function on db_manager
     info!("starting web server...");
@@ -989,7 +985,8 @@ async fn main() -> std::io::Result<()> {
             .service(get_user_by_token)
             .service(get_user_by_email)
             .app_data(db_manager.clone())
-            .app_data(kafka_handler.clone())
+            .app_data(web::Data::new(pool.clone()))
+            // .app_data(kafka_handler.clone())
             .app_data(github_client.clone())
             .app_data(google_client.clone())
             .app_data(email_manager.clone())
