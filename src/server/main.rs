@@ -730,7 +730,10 @@ async fn get_user_by_email(
         }
     };
     match db.get_user_by_email(email.as_str()).await {
-        Ok(user) => HttpResponse::Ok().json(user),
+        Ok(Some(user)) => HttpResponse::Ok().json(user),
+        Ok(None) => HttpResponse::Ok().json(json!({
+            "error": "User not found"
+        })),
         Err(e) => {
             println!("Error getting user by email: {}", e);
             HttpResponse::InternalServerError().body(format!("Failed to get user: {}", e))
@@ -913,9 +916,11 @@ struct GithubClient(BasicClient);
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let _ = env_logger::try_init();
-
+    dotenv::dotenv().ok();
     // 初始化mysql数据库
-    let mysql_connect = dotenv::var("MYSQL_URL").unwrap();
+    let mysql_connect = std::env::var("MYSQL_URL").unwrap();
+    info!("mysql connect url is: {}", mysql_connect);
+
     let _db_manager = mysql_utils::new(mysql_connect.as_str()).await.unwrap();
     let db_manager = web::Data::new(_db_manager);
     db_manager.create_table().await.unwrap();
