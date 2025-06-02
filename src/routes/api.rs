@@ -112,3 +112,11 @@ async fn me(session: Session, req: HttpRequest) -> impl Responder {
     session.purge();
     HttpResponse::Ok().body("已登出")
 }
+
+// #[derive(Deserialize)]
+// pub struct SendsmsCodeRequest {
+//     phone: String
+// }
+
+// #[post("sendsmscode")]
+// async fn sendsmscode()

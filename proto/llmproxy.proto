@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package llmproxy;
+
+service LLMProxy {
+  rpc ChatCompletion (ChatCompletionRequest) returns (ChatCompletionResponse);
+}
+
+message ChatCompletionRequest {
+  string provider = 1; // openai/claude/gemini/qwen/deepseek
+  string model = 2;
+  string prompt = 3;
+  string api_key = 4; // 建议生产环境由服务端配置
+  // 可扩展参数
+  int32 max_tokens = 5;
+  float temperature = 6;
+}
+
+message ChatCompletionResponse {
+  string response_json = 1; // 直接返回第三方API的原始JSON
+}

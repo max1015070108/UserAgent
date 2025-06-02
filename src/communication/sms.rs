@@ -20,6 +20,43 @@ struct AliyunSmsResponse {
     BizId: Option<String>,
 }
 
+struct SmsManager {}
+
+impl SmsManager {
+    pub fn new() -> Self {
+        SmsManager {}
+    }
+
+    pub async fn send_code(
+        &self,
+        access_key_id: &str,
+        access_key_secret: &str,
+        sign_name: &str,
+        template_code: &str,
+        phone: &str,
+    ) -> Result<(), String> {
+        let code = generate_code();
+        let result = send_sms_code(
+            access_key_id,
+            access_key_secret,
+            sign_name,
+            template_code,
+            phone,
+            &code,
+        )
+        .await;
+
+        if result.is_ok() {
+            save_code(phone, &code);
+        }
+
+        result
+    }
+
+    pub fn verify(&self, phone: &str, code: &str) -> bool {
+        verify_code(phone, code)
+    }
+}
 /// 发送短信验证码
 pub async fn send_sms_code(
     access_key_id: &str,

@@ -1,5 +1,6 @@
 //sqlite
 use sqlx::sqlite::SqlitePool;
+use tonic;
 
 use actix_cors::Cors;
 use actix_session::{Session, SessionMiddleware};
@@ -43,6 +44,10 @@ use UserAgent::mq::kafka;
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode as httpStatusCode};
 use reqwest;
 use std::time::Duration;
+
+//proxy
+use tonic::transport::Server;
+use UserAgent::llmproxy::llm_proxy_server::LlmProxyServer;
 
 // const MarketingServerUrl: &str = "topai-marketing-server.demo-ray.svc.cluster.local/api/v1/voucher/exchange:80";
 const MARKETING_SERVER_URL: &str = "159.135.196.73:32756";
@@ -932,6 +937,19 @@ async fn main() -> std::io::Result<()> {
     let mut conn = pool.acquire().await.unwrap();
     sqlite_utils::init_db(&mut *conn).await.unwrap();
 
+    //gprc
+    // 1. 启动 gRPC 服务（用 tokio::spawn）
+    tokio::spawn(async {
+        let addr = "0.0.0.0:50051".parse().unwrap();
+        println!("gRPC LLM Proxy listening on {}", addr);
+
+        Server::builder()
+            .add_service(LlmProxyServer::new(LLMProxyService))
+            .serve(addr)
+            .await
+            .expect("gRPC server failed");
+    });
+
     // // kafka obj
     // let kafka_obj = match kafka::KafkaHandler::new(
     //     env::var("BROKER").expect("broker must be set").as_str(),
@@ -999,4 +1017,17 @@ async fn main() -> std::io::Result<()> {
     .bind("0.0.0.0:8000")?
     .run()
     .await
+}
+
+pub struct LLMProxyService;
+
+#[tonic::async_trait]
+impl UserAgent::llmproxy::llm_proxy_server::LlmProxy for LLMProxyService {
+    async fn chat_completion(
+        &self,
+        request: tonic::Request<UserAgent::llmproxy::ChatCompletionRequest>,
+    ) -> Result<tonic::Response<UserAgent::llmproxy::ChatCompletionResponse>, tonic::Status> {
+        // 你的实现代码
+        todo!()
+    }
 }
