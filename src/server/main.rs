@@ -33,7 +33,7 @@ use oauth2::{
     StandardErrorResponse, TokenUrl,
 };
 
-use UserAgent::communication::aws_utils::EmailManager;
+use UserAgent::communication::aws_utils::{EmailManReq, EmailManager};
 // use DatabaseManager
 use UserAgent::database::mysql_utils::{self};
 
@@ -332,6 +332,11 @@ async fn main() -> std::io::Result<()> {
                         "aliyun_sms",
                         web::post().to(move |data: web::Data<api::SmsMan>, params: web::Json<api::SmsManReq> | async move {
                             data.get_ref().send_phone_code(params.phone.as_str(),params.data.as_str()).await
+                        }),
+                    ).route(
+                        "email_code",
+                        web::post().to(move |data: web::Data<EmailManager>, params: web::Json<EmailManReq> | async move {
+                            data.get_ref().send_email_to(params.email.as_str(),params.pin_code.as_str()).await
                         }),
                     )
             )

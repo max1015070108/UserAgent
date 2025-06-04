@@ -614,7 +614,9 @@ mod tests {
         std::env::set_var("ALIYUN_SMS_TEMPLATE_CODE", "你的模板");
 
         let sms_man = SmsMan::new();
-        let result = sms_man.send_phone_code("15267067659").await;
+        let result = sms_man
+            .send_phone_code("15267067659", "hello".as_str())
+            .await;
         println!("阿里云返回: {:?}", result);
         assert!(result.is_ok());
     }

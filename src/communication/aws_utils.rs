@@ -1,5 +1,8 @@
-use anyhow::anyhow;
-use anyhow::Error;
+use actix_web::{
+    cookie::Cookie, error::ErrorInternalServerError, get, post, web, Error as ActixError,
+    HttpRequest, HttpResponse, Responder,
+};
+use anyhow::{anyhow, Error as anyhowError};
 use aws_config;
 use aws_sdk_sesv2::operation::create_email_template::CreateEmailTemplateError;
 use aws_sdk_sesv2::types::EmailTemplateContent;
@@ -8,8 +11,16 @@ use aws_sdk_sesv2::{
     Client,
 };
 use env_logger::Target::Stdout;
+use serde::Deserialize;
 use serde_json::json;
 use std::io::Write;
+
+//sms
+#[derive(Deserialize, Debug)]
+pub struct EmailManReq {
+    pub email: String,
+    pub pin_code: String,
+}
 
 pub struct EmailManager {
     pub file_path: std::path::PathBuf,
@@ -24,7 +35,7 @@ impl EmailManager {
         }
     }
 
-    pub async fn createTemplate(&mut self) -> Result<(), Error> {
+    pub async fn createTemplate(&mut self) -> Result<(), anyhowError> {
         let template_html = std::fs::read_to_string(&self.file_path)
             .unwrap_or_else(|_| "../../resources/topai_pin_notification.html".to_string());
 
@@ -55,7 +66,11 @@ impl EmailManager {
         Ok(())
     }
 
-    pub async fn send_email_to(&self, email: &str, pincode: &str) -> Result<(), Error> {
+    pub async fn send_email_to(
+        &self,
+        email: &str,
+        pincode: &str,
+    ) -> Result<HttpResponse, ActixError> {
         let template_data = json!({
             "name": email,
             "pin_code": pincode,
@@ -74,7 +89,7 @@ impl EmailManager {
             .build();
 
         // 设置发件人和收件人
-        let sender = "support@topnetwork.ai";
+        let sender = "max1015070108@gmail.com";
         // let recipient = "max1015070108@gmail.com";
 
         match self
@@ -88,11 +103,14 @@ impl EmailManager {
         {
             Ok(response) => {
                 println!("Email sent successfully {:?}", response);
-                Ok(())
+                Ok(HttpResponse::Ok().finish())
             }
             Err(e) => {
                 println!("Error sending email: {:?}", e);
-                return Err(e.into());
+                return Err(ErrorInternalServerError(format!(
+                    "Failed to send email: {}",
+                    e
+                )));
             }
         }
 
