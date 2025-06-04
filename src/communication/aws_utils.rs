@@ -10,6 +10,7 @@ use aws_sdk_sesv2::{
 use env_logger::Target::Stdout;
 use serde_json::json;
 use std::io::Write;
+
 pub struct EmailManager {
     pub file_path: std::path::PathBuf,
     client: Client,
