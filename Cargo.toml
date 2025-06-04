@@ -58,6 +58,8 @@ futures-util = "0.3.31"
 ## proto
 tonic = "0.13"
 prost = "0.13"
+mockito = "1.7.0"
+sms = { git = "https://github.com/EchoRust/SMS", branch = "main" }
 
 # [lib]
 # path = "src/lib.rs"

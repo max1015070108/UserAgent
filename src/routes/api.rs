@@ -1,7 +1,7 @@
 // src/api.rs
 
 // use UserAgent::communication::sms;
-use crate::communication::sms;
+use crate::communication::smscom;
 use crate::database::sqlite_utils as db;
 use actix_session::Session;
 use actix_web::{
@@ -38,14 +38,17 @@ use crate::config::constant;
 use oauth2::TokenResponse;
 use serde_json::Value;
 
+//sms import
+use sms::aliyun::Aliyun;
+
 #[derive(Deserialize)]
 pub struct SendCodeRequest {
     phone: String,
 }
 #[post("/send_code")]
 async fn send_code(data: web::Data<SqlitePool>, req: web::Json<SendCodeRequest>) -> impl Responder {
-    let code = sms::generate_code();
-    sms::save_code(&req.phone, &code);
+    let code = smscom::generate_code();
+    smscom::save_code(&req.phone, &code);
 
     println!("模拟发送短信到 {}: 验证码是 {}", req.phone, code);
 
@@ -78,7 +81,7 @@ async fn login_by_code(
     data: web::Data<SqliteConnection>,
     req: web::Json<LoginByCodeRequest>,
 ) -> impl Responder {
-    if sms::verify_code(&req.phone, &req.code) {
+    if smscom::verify_code(&req.phone, &req.code) {
         let exp = (Utc::now() + Duration::hours(2)).timestamp() as usize;
         let claims = Claims {
             sub: req.phone.clone(),
@@ -578,4 +581,90 @@ pub fn create_github_oauth_client(
     .set_redirect_uri(
         RedirectUrl::new(format!("{}/auth", redirect_uri)).expect("Invalid redirect URL"),
     )
+}
+
+//sms
+#[derive(Deserialize, Debug)]
+pub struct SmsManReq {
+    pub phone: String,
+    pub data: String,
+}
+
+// #[derive(Clone)]
+pub struct SmsMan {
+    // pub aliyun_sms: Aliyun<'a>,
+    pub sign_name: String,
+    pub template_code: String,
+    pub access_key_id: String,
+    pub access_key_secret: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mockito;
+    use std::env;
+
+    #[tokio::test]
+    async fn test_send_phone_code_real() {
+        // 设置真实环境变量（或确保 shell 环境已设置）
+        std::env::set_var("ALIYUN_ACCESS_KEY_ID", "你的真实key");
+        std::env::set_var("ALIYUN_ACCESS_KEY_SECRET", "你的真实secret");
+        std::env::set_var("ALIYUN_SMS_SIGN_NAME", "你的签名");
+        std::env::set_var("ALIYUN_SMS_TEMPLATE_CODE", "你的模板");
+
+        let sms_man = SmsMan::new();
+        let result = sms_man.send_phone_code("15267067659").await;
+        println!("阿里云返回: {:?}", result);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_phone_code_error() {
+        // Don't set required env vars to test error case
+        env::remove_var("ALIYUN_ACCESS_KEY_ID");
+
+        let sms_man = SmsMan::new();
+        let result = sms_man.send_phone_code("13800138000").await;
+
+        assert!(result.is_err());
+    }
+}
+
+impl SmsMan {
+    pub fn new() -> Self {
+        dotenv::dotenv().ok();
+        let access_key_id = env::var("ALIYUN_ACCESS_KEY_ID").expect("ALIYUN_ACCESS_KEY_ID not set");
+        let access_key_secret =
+            env::var("ALIYUN_ACCESS_KEY_SECRET").expect("ALIYUN_ACCESS_KEY_SECRET not set");
+        let sign_name = env::var("SIGN_NAME").expect("SIGN_NAME not set");
+        let temp_code = env::var("TEMP_CODE").expect("TEMP_CODE not set");
+
+        SmsMan {
+            access_key_id: access_key_id,
+            access_key_secret: access_key_secret,
+            sign_name: sign_name,
+            template_code: temp_code,
+        }
+    }
+
+    pub async fn send_phone_code(&self, phone: &str, data: &str) -> Result<String, Error> {
+        let aliyun_sms_obj =
+            Aliyun::new(self.access_key_id.as_str(), self.access_key_secret.as_str());
+        let resp = aliyun_sms_obj
+            .send_sms(
+                phone,
+                self.sign_name.as_str(),
+                self.template_code.as_str(),
+                data,
+            )
+            .await;
+
+        // println("{:?}", resp);
+        match resp {
+            Ok(map) => Ok(map.get("Code").unwrap_or(&"".to_string()).to_string()),
+            Err(e) => Err(ErrorInternalServerError(e.to_string())),
+        }
+        // Ok(response_text)
+    }
 }

@@ -1,2 +1,2 @@
 pub mod aws_utils;
-pub mod sms;
+pub mod smscom;
